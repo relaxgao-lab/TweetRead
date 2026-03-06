@@ -1,0 +1,109 @@
+@import "lxgw-wenkai-webfont/style.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 0%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 0%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 0%;
+    --primary: 0 0% 9%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 96.1%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 96.1%;
+    --muted-foreground: 0 0% 45.1%;
+    --accent: 0 0% 96.1%;
+    --accent-foreground: 0 0% 9%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 89.8%;
+    --input: 0 0% 89.8%;
+    --ring: 0 0% 3.9%;
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  html {
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-y: none;
+    overscroll-behavior: none;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  html::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: "LXGW WenKai", sans-serif;
+    padding-bottom: env(safe-area-inset-bottom, 0);
+    padding-left: env(safe-area-inset-left, 0);
+    padding-right: env(safe-area-inset-right, 0);
+    overscroll-behavior-y: none;
+    overscroll-behavior: none;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  body::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes dot-flash {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+@keyframes sound-wave {
+  0%, 100% { transform: scaleY(0.6); opacity: 0.7; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+
+.animate-dot-flash-1 { animation: dot-flash 1s ease-in-out infinite; }
+.animate-dot-flash-2 { animation: dot-flash 1s ease-in-out infinite 0.15s; }
+.animate-dot-flash-3 { animation: dot-flash 1s ease-in-out infinite 0.3s; }
+
+.animate-sound-wave { animation: sound-wave 0.8s ease-in-out infinite; }
+.animate-sound-wave-1 { animation-delay: 0ms; }
+.animate-sound-wave-2 { animation-delay: 0.1s; }
+.animate-sound-wave-3 { animation-delay: 0.2s; }
+.animate-sound-wave-4 { animation-delay: 0.3s; }
+
+.tweet-card { animation: fadeIn 0.2s ease-out forwards; }
+
+/* 隐藏竖向滚动条 */
+.hide-vertical-scrollbar {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+.hide-vertical-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+
+/* 移动端：背景不固定，避免 iOS 性能问题与白屏 */
+@media (max-width: 768px) {
+  .mobile-bg-scroll {
+    background-attachment: scroll !important;
+  }
+}
