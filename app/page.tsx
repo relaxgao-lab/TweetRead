@@ -524,9 +524,10 @@ export default function HomePage() {
   }, [lookupPopup])
 
   // 点击「查词」按钮外部时关闭暂存查词
+  // 只监听 mousedown（不监听 touchstart），避免用户拖动选区手柄时误触发关闭
   useEffect(() => {
     if (!pendingLookup) return
-    const handler = (e: MouseEvent | TouchEvent) => {
+    const handler = (e: MouseEvent) => {
       const target = e.target as HTMLElement
       if (!target.closest("[data-pending-lookup]")) {
         setPendingLookup(null)
@@ -534,9 +535,27 @@ export default function HomePage() {
       }
     }
     document.addEventListener("mousedown", handler)
-    document.addEventListener("touchstart", handler)
-    return () => { document.removeEventListener("mousedown", handler); document.removeEventListener("touchstart", handler) }
+    return () => document.removeEventListener("mousedown", handler)
   }, [pendingLookup])
+
+  // selectionchange：用户拖动手柄扩大/缩小选区时，只更新文本（不更新位置，避免按钮跳动）
+  const pendingLookupRef = useRef(pendingLookup)
+  pendingLookupRef.current = pendingLookup
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      if (!pendingLookupRef.current) return
+      const sel = window.getSelection()
+      const text = sel?.toString().trim()
+      if (!text) {
+        setPendingLookup(null)
+        return
+      }
+      // 只更新 text，按钮位置保持初始 readSelection 时的 rect.bottom
+      setPendingLookup(prev => prev ? { ...prev, text } : null)
+    }
+    document.addEventListener("selectionchange", handleSelectionChange)
+    return () => document.removeEventListener("selectionchange", handleSelectionChange)
+  }, [])
 
   // ── 推文点击：手机展开底部抽屉；桌面打开 AI 面板 ──
   // 仅选中推文（文章 onClick：手机端只高亮，桌面端顺带开 AI）
@@ -1164,7 +1183,10 @@ export default function HomePage() {
           className="fixed z-[200] pointer-events-auto"
           style={{
             left: Math.max(8, Math.min(pendingLookup.anchorX - 28, (typeof window !== "undefined" ? window.innerWidth : 375) - 72)),
-            top: Math.max(8, pendingLookup.anchorY - 52),
+            top: Math.min(
+              pendingLookup.anchorY + 8,
+              (typeof window !== "undefined" ? window.innerHeight : 800) - 48
+            ),
           }}
         >
           <button
@@ -1218,17 +1240,25 @@ function TweetCard({
   onAiClick: () => void
   isMobile: boolean
 }) {
-  const handleMouseUp = () => {
+  const readSelection = () => {
     if (!onTextSelect) return
     const sel = window.getSelection()
     const text = sel?.toString().trim()
     if (!text || text.length > 200) return
     try {
       const rect = sel!.getRangeAt(0).getBoundingClientRect()
-      onTextSelect(text, rect.left + rect.width / 2, rect.top)
+      onTextSelect(text, rect.left + rect.width / 2, rect.bottom)
       // 不在此处清除 selection，保持高亮让用户看到选中内容
-      // 父组件负责在确认/取消时清除
     } catch {}
+  }
+
+  // 桌面端：mouseup 直接读取 selection
+  const handleMouseUp = () => readSelection()
+
+  // 手机端：touchend 后浏览器需要一帧才能将长按 selection 提交给 window.getSelection()
+  const handleTouchEnd = () => {
+    if (!isMobile) return
+    requestAnimationFrame(() => readSelection())
   }
 
   return (
@@ -1270,6 +1300,7 @@ function TweetCard({
           <p
             className="mt-1.5 text-sm text-gray-800 leading-relaxed whitespace-pre-wrap break-words line-clamp-6 select-text"
             onMouseUp={handleMouseUp}
+            onTouchEnd={handleTouchEnd}
           >
             {smartCase(tweet.text)}
           </p>
@@ -1277,6 +1308,7 @@ function TweetCard({
             <p
               className="mt-1 text-sm text-gray-500 leading-relaxed whitespace-pre-wrap break-words line-clamp-4 select-text"
               onMouseUp={handleMouseUp}
+              onTouchEnd={handleTouchEnd}
             >
               {tweet.textZh}
             </p>
