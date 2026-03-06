@@ -4,6 +4,10 @@ export interface AudioRecorderResult {
   duration: number
 }
 
+type WindowWithWebkitAudioContext = Window & typeof globalThis & {
+  webkitAudioContext?: typeof AudioContext
+}
+
 export class AudioRecorder {
   private mediaRecorder: MediaRecorder | null = null
   private audioChunks: Blob[] = []
@@ -20,7 +24,8 @@ export class AudioRecorder {
 
   constructor() {
     if (typeof window !== 'undefined') {
-      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+      const audioContextCtor = window.AudioContext || (window as WindowWithWebkitAudioContext).webkitAudioContext
+      this.audioContext = audioContextCtor ? new audioContextCtor() : null
     }
   }
 

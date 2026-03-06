@@ -1,5 +1,5 @@
 import { AudioRecorder } from './audio-recorder-service'
-import { isSpeechSynthesisSupported, initSpeechSynthesis } from './speech-utils'
+import { initSpeechSynthesis } from './speech-utils'
 import { TTS_PROVIDER } from '@/config'
 
 export type SpeechStatus = 'idle' | 'recording' | 'processing' | 'speaking'
@@ -10,6 +10,10 @@ interface WhisperSpeechServiceConfig {
   onError?: (error: string) => void
   onSpeechEnd?: () => void
   ttsProvider?: 'system' | 'openai'
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback
 }
 
 export class WhisperSpeechService {
@@ -49,8 +53,8 @@ export class WhisperSpeechService {
     try {
       await this.recorder.start({})
       this.setStatus('recording')
-    } catch (error: any) {
-      this.handleError(error.message || 'Failed to start recording')
+    } catch (error: unknown) {
+      this.handleError(getErrorMessage(error, 'Failed to start recording'))
     }
   }
 
@@ -59,8 +63,8 @@ export class WhisperSpeechService {
     try {
       const { audioBlob, duration } = await this.recorder.stop()
       await this.handleAudioDataAvailable(audioBlob, duration)
-    } catch (error: any) {
-      this.handleError(error.message || 'Failed to stop recording')
+    } catch (error: unknown) {
+      this.handleError(getErrorMessage(error, 'Failed to stop recording'))
       this.setStatus('idle')
     }
   }
@@ -90,8 +94,8 @@ export class WhisperSpeechService {
       } else {
         await this._speakOpenAI(text)
       }
-    } catch (error: any) {
-      this.handleError(error.message || 'Speech synthesis failed')
+    } catch (error: unknown) {
+      this.handleError(getErrorMessage(error, 'Speech synthesis failed'))
       this.setStatus('idle')
     }
   }
@@ -148,10 +152,10 @@ export class WhisperSpeechService {
         this.config.onSpeechEnd?.()
         resolve() 
       }
-      utterance.onerror = (e) => { 
+      utterance.onerror = (e: SpeechSynthesisErrorEvent) => { 
         clearTimeout(timeout)
         cleanup()
-        const errorType = (e as any).error || 'unknown'
+        const errorType = e.error || 'unknown'
         const errorMsg = errorType === 'not-allowed' 
           ? '语音播放被阻止，请检查浏览器权限设置'
           : errorType === 'synthesis-failed'
@@ -293,14 +297,18 @@ export class WhisperSpeechService {
           // 如果没有返回 Promise，也设置状态
           this.setStatus('speaking')
         }
-      } catch (playError: any) {
+      } catch (playError: unknown) {
+        const errorName = playError instanceof Error ? playError.name : ''
+        const errorCode = typeof playError === 'object' && playError !== null && 'code' in playError
+          ? (playError as { code?: unknown }).code
+          : undefined
         console.error('Audio play error:', {
-          name: playError.name,
-          message: playError.message,
-          code: playError.code
+          name: errorName,
+          message: getErrorMessage(playError, 'Audio play failed'),
+          code: errorCode
         })
         // 如果播放被阻止（例如浏览器自动播放策略）
-        if (playError.name === 'NotAllowedError' || playError.name === 'NotSupportedError') {
+        if (errorName === 'NotAllowedError' || errorName === 'NotSupportedError') {
           if (audioUrl) URL.revokeObjectURL(audioUrl)
           this.currentOpenAIAudio = null
           throw new Error('音频播放被阻止，请点击页面任意位置后重试')
@@ -322,7 +330,7 @@ export class WhisperSpeechService {
           cleanup()
           resolve()
         }
-        audio!.onerror = (e) => {
+        audio!.onerror = () => {
           cleanup()
           const errorMsg = audio!.error?.message || '音频播放失败'
           reject(new Error(errorMsg))
@@ -335,7 +343,7 @@ export class WhisperSpeechService {
           }
         }, 60000) // 60秒超时
       })
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.setStatus('idle')
       if (audioUrl) URL.revokeObjectURL(audioUrl)
       if (audio) {
@@ -389,8 +397,8 @@ export class WhisperSpeechService {
       }
       const transcript = await this.transcribeAudio(audioBlob)
       this.config.onTranscript?.(transcript || '')
-    } catch (error: any) {
-      this.handleError(error.message || 'Failed to process audio')
+    } catch (error: unknown) {
+      this.handleError(getErrorMessage(error, 'Failed to process audio'))
     } finally {
       if (this.status === 'processing') this.setStatus('idle')
     }

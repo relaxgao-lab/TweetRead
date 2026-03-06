@@ -2,6 +2,10 @@ import { NextRequest } from 'next/server';
 
 export const runtime = 'edge';
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'OpenAI TTS error'
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { text, model = 'gpt-4o-mini-tts', voice = 'nova', response_format = 'wav', speed = 1.0 } = await req.json();
@@ -27,7 +31,7 @@ export async function POST(req: NextRequest) {
       status: 200,
       headers: { 'Content-Type': 'audio/mpeg' },
     });
-  } catch (error: any) {
-    return new Response(JSON.stringify({ error: error.message || 'OpenAI TTS error' }), { status: 500 });
+  } catch (error: unknown) {
+    return new Response(JSON.stringify({ error: getErrorMessage(error) }), { status: 500 });
   }
 }

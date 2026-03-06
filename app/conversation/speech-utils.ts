@@ -26,7 +26,8 @@ export const initSpeechSynthesis = (): Promise<void> =>
     setTimeout(() => {
       if (!loaded) {
         window.speechSynthesis.removeEventListener("voiceschanged", handler)
-        checkVoices() ? resolve() : reject(new Error("No voices available"))
+        if (checkVoices()) resolve()
+        else reject(new Error("No voices available"))
       }
     }, 3000)
   })

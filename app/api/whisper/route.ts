@@ -14,6 +14,10 @@ if (hasApiKey) {
 
 export const runtime = "nodejs"
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Whisper API failed"
+}
+
 export async function POST(req: Request) {
   if (!hasApiKey || !openaiClient) {
     return NextResponse.json(
@@ -49,10 +53,10 @@ export async function POST(req: Request) {
       })
       return NextResponse.json({ text: transcription.text })
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Whisper API error:", error)
     return NextResponse.json(
-      { error: error.message || "Whisper API failed" },
+      { error: getErrorMessage(error) },
       { status: 500 }
     )
   }

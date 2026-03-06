@@ -45,33 +45,47 @@ function getApiKey(): string {
   return key
 }
 
-function parseTweet(raw: any): Tweet {
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? value as Record<string, unknown> : {}
+}
+
+function parseMedia(rawMedia: unknown): TweetMedia[] {
+  if (!Array.isArray(rawMedia)) return []
+  return rawMedia.map((item) => {
+    const media = asRecord(item)
+    return {
+      type: (media.type as TweetMedia["type"]) ?? "photo",
+      url: (media.url as string | undefined) ?? (media.fullUrl as string | undefined) ?? undefined,
+      previewUrl: (media.previewUrl as string | undefined) ?? (media.thumbnailUrl as string | undefined) ?? undefined,
+    }
+  })
+}
+
+function parseTweet(raw: unknown): Tweet {
+  const tweet = asRecord(raw)
+  const author = asRecord(tweet.author)
   return {
-    id: raw.id ?? "",
-    text: raw.text ?? "",
-    url: raw.url ?? `https://x.com/i/web/status/${raw.id}`,
-    createdAt: raw.createdAt ?? "",
-    likeCount: raw.likeCount ?? 0,
-    retweetCount: raw.retweetCount ?? 0,
-    replyCount: raw.replyCount ?? 0,
-    viewCount: raw.viewCount ?? 0,
-    quoteCount: raw.quoteCount ?? 0,
-    isReply: raw.isReply ?? false,
-    lang: raw.lang ?? "en",
-    media: Array.isArray(raw.media) ? raw.media.map((m: any) => ({
-      type: m.type ?? "photo",
-      url: m.url ?? m.fullUrl ?? undefined,
-      previewUrl: m.previewUrl ?? m.thumbnailUrl ?? undefined,
-    })) : [],
+    id: (tweet.id as string | undefined) ?? "",
+    text: (tweet.text as string | undefined) ?? "",
+    url: (tweet.url as string | undefined) ?? `https://x.com/i/web/status/${(tweet.id as string | undefined) ?? ""}`,
+    createdAt: (tweet.createdAt as string | undefined) ?? "",
+    likeCount: (tweet.likeCount as number | undefined) ?? 0,
+    retweetCount: (tweet.retweetCount as number | undefined) ?? 0,
+    replyCount: (tweet.replyCount as number | undefined) ?? 0,
+    viewCount: (tweet.viewCount as number | undefined) ?? 0,
+    quoteCount: (tweet.quoteCount as number | undefined) ?? 0,
+    isReply: (tweet.isReply as boolean | undefined) ?? false,
+    lang: (tweet.lang as string | undefined) ?? "en",
+    media: parseMedia(tweet.media),
     author: {
-      userName: raw.author?.userName ?? "",
-      name: raw.author?.name ?? "",
-      profilePicture: raw.author?.profilePicture ?? "",
-      isBlueVerified: raw.author?.isBlueVerified ?? false,
-      followers: raw.author?.followers ?? 0,
-      description: raw.author?.description ?? "",
+      userName: (author.userName as string | undefined) ?? "",
+      name: (author.name as string | undefined) ?? "",
+      profilePicture: (author.profilePicture as string | undefined) ?? "",
+      isBlueVerified: (author.isBlueVerified as boolean | undefined) ?? false,
+      followers: (author.followers as number | undefined) ?? 0,
+      description: (author.description as string | undefined) ?? "",
     },
-    quotedTweet: raw.quoted_tweet ? parseTweet(raw.quoted_tweet) : null,
+    quotedTweet: tweet.quoted_tweet ? parseTweet(tweet.quoted_tweet) : null,
   }
 }
 
@@ -90,13 +104,13 @@ export async function fetchUserTweets(userName: string, cursor?: string): Promis
     throw new Error(`GetXAPI error ${res.status}: ${err}`)
   }
 
-  const data = await res.json()
-  const rawTweets: any[] = data.tweets ?? []
+  const data = asRecord(await res.json())
+  const rawTweets = Array.isArray(data.tweets) ? data.tweets : []
 
   return {
     tweets: rawTweets.map(parseTweet),
-    hasMore: data.has_more ?? false,
-    nextCursor: data.next_cursor ?? undefined,
+    hasMore: (data.has_more as boolean | undefined) ?? false,
+    nextCursor: (data.next_cursor as string | undefined) ?? undefined,
   }
 }
 
@@ -109,7 +123,7 @@ export async function fetchTweetById(id: string): Promise<Tweet | null> {
 
   if (!res.ok) return null
 
-  const data = await res.json()
+  const data = asRecord(await res.json())
   const raw = data.tweet ?? data
   return parseTweet(raw)
 }

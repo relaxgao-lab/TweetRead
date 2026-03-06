@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea"
 import {
   ArrowLeft, Send, Mic, StopCircle, Volume2, VolumeX,
   Sparkles, ExternalLink, Heart, Repeat2, MessageCircle, Eye,
-  ChevronDown, ChevronUp,
+  ChevronDown,
 } from "lucide-react"
 import type { Tweet } from "@/lib/twitter"
 import { formatRelativeTime, formatCount } from "@/lib/twitter"
@@ -70,6 +70,14 @@ function extractSpeakContent(content: string): string {
   const match = content.match(/\[\s*SPEAK\s*\]([\s\S]*?)\[\s*\/\s*SPEAK\s*\]/i)
   if (match) return match[1].trim()
   return content.replace(/\[\s*\/?\s*SPEAK\s*\]/gi, "").trim() || content
+}
+
+function smartCase(text: string): string {
+  const alpha = text.replace(/[^a-zA-Z]/g, "")
+  if (!alpha.length) return text
+  const upperRatio = (text.match(/[A-Z]/g)?.length ?? 0) / alpha.length
+  if (upperRatio < 0.7) return text
+  return text.toLowerCase().replace(/\b[a-z]/g, (char) => char.toUpperCase())
 }
 
 // ─── Skeleton loading component ───────────────────────────────────────────────
@@ -212,8 +220,8 @@ export default function TweetPage() {
       } catch {}
     }
 
-    let raf1: number, raf2: number
-    raf1 = requestAnimationFrame(() => {
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
       raf2 = requestAnimationFrame(() => setAllowChatTransition(true))
     })
     return () => {
@@ -233,8 +241,8 @@ export default function TweetPage() {
 
   useEffect(() => {
     if (!effectiveChatOpen || !justRestoredOpenRef.current) return
-    let raf1: number, raf2: number
-    raf1 = requestAnimationFrame(() => {
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
       raf2 = requestAnimationFrame(() => {
         justRestoredOpenRef.current = false
         setAllowChatTransition(true)
@@ -498,7 +506,7 @@ export default function TweetPage() {
             <span className="text-xs font-semibold text-gray-800 truncate">{tweet.author.name}</span>
             <span className="text-xs text-gray-400 truncate">@{tweet.author.userName}</span>
           </div>
-          <p className="text-xs text-gray-700 leading-relaxed">{tweet.text}</p>
+          <p className="text-xs text-gray-700 leading-relaxed">{smartCase(tweet.text)}</p>
         </div>
         {messages.length === 0 && (
           <div className="text-center text-sm text-gray-500 mt-8 space-y-2">

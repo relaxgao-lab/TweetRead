@@ -3,52 +3,43 @@
 import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react"
 import Image from "next/image"
 
+import { AiPanel, type AiMessage } from "@/components/ai-panel"
+import { SelectionActionMenu } from "@/components/selection-action-menu"
 import { ACCOUNTS } from "@/config/accounts"
 import type { Tweet } from "@/lib/twitter"
 import { formatRelativeTime, formatCount } from "@/lib/twitter"
-import {
-  Heart, Repeat2, MessageCircle, Eye, RefreshCw, ChevronDown, ChevronUp,
-  Send, Mic, StopCircle, Volume2, VolumeX, X, Sparkles, ExternalLink,
-} from "lucide-react"
+import { Heart, Repeat2, MessageCircle, Eye, RefreshCw, ChevronDown, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Textarea } from "@/components/ui/textarea"
 import { whisperSpeechService, type SpeechStatus } from "@/app/conversation/whisper-speech-service"
 
 // ─── 常量 ─────────────────────────────────────────────────────────────────────
 const MIN_CHAT_WIDTH = 280
 const MAX_CHAT_WIDTH_PERCENT = 70
 const DEFAULT_CHAT_WIDTH = 420
+
 // ─── 类型 ─────────────────────────────────────────────────────────────────────
 type SheetState = "hidden" | "half" | "full"
 type TweetCache = Record<string, { tweets: Tweet[]; hasMore: boolean; nextCursor?: string; loadedAt: number }>
-interface Message { role: "user" | "assistant"; content: string }
-interface LookupResult {
-  phonetic?: string
-  partOfSpeech?: string
-  translation: string
-  definition?: string
-  breakdown?: string
-  grammar?: string
-  example?: string
-  exampleZh?: string
+type SelectionMode = "wordOrPhrase" | "sentenceOrPassage"
+type SelectionSource = "tweet" | "assistantReply"
+type SelectionActionId = "lookup" | "pattern" | "readAloud" | "followUp" | "explainReply" | "translateReply" | "quoteReply"
+type SelectionAction = { id: SelectionActionId; label: string; buildPrompt?: (text: string) => string; buildDraft?: () => string }
+type SelectionMenuState = {
+  text: string
+  anchorX: number
+  anchorY: number
+  tweet: Tweet
+  mode: SelectionMode
+  source: SelectionSource
+  messageIndex?: number
+  fullMessageContent?: string
 }
-interface LookupPopupState { text: string; anchorX: number; anchorY: number; tweet: Tweet }
-
-// ─── 快捷提问 + 配色 ───────────────────────────────────────────────────────────
-const PRESET_PROMPTS = [
-  { label: "翻译",     text: "请将这条推文翻译成中文，并保持原意。" },
-  { label: "解释背景", text: "请解释这条推文的背景，帮我理解它的含义和重要性。" },
-  { label: "总结要点", text: "请用简洁的中文总结这条推文的核心要点。" },
-  { label: "市场影响", text: "请分析这条信息对市场或相关领域可能的影响。" },
-]
-
-const pastelColors = [
-  { bg: "bg-slate-100",  border: "border-slate-200",  text: "text-slate-700",  hover: "hover:bg-slate-200/60"  },
-  { bg: "bg-violet-100", border: "border-violet-200", text: "text-violet-700", hover: "hover:bg-violet-200/60" },
-  { bg: "bg-pink-100",   border: "border-pink-200",   text: "text-pink-700",   hover: "hover:bg-pink-200/60"   },
-  { bg: "bg-amber-100",  border: "border-amber-200",  text: "text-amber-800",  hover: "hover:bg-amber-200/60"  },
-]
-const voiceColor = { bg: "bg-emerald-100", border: "border-emerald-200", text: "text-emerald-700", hover: "hover:bg-emerald-200/60" }
+type QuotedSelectionState = {
+  text: string
+  sourceRole: "assistant"
+  messageIndex: number
+  fullMessageContent: string
+}
 
 // ─── 翻译缓存（localStorage，上限 500 条）────────────────────────────────────────
 const TRANS_CACHE_KEY = "tweet-translations-v2"
@@ -97,6 +88,162 @@ function smartCase(text: string): string {
   return text.toLowerCase().replace(/\b[a-z]/g, c => c.toUpperCase())
 }
 
+function isWordOrPhraseLookup(text: string): boolean {
+  const normalized = text.trim().replace(/\s+/g, " ")
+  if (!normalized) return true
+
+  const wordCount = normalized.split(" ").length
+  const hasStrongSentencePunctuation = /[.!?;:]/.test(normalized)
+  const hasClauseSignal = /,|\bthat\b|\bwhich\b|\bwho\b|\bwhen\b|\bwhile\b|\bif\b|\bbecause\b|\bbut\b|\band\b/i.test(normalized)
+
+  return wordCount <= 4 && !hasStrongSentencePunctuation && !hasClauseSignal
+}
+
+function getSelectionMode(text: string): SelectionMode {
+  return isWordOrPhraseLookup(text) ? "wordOrPhrase" : "sentenceOrPassage"
+}
+
+function buildLookupPrompt(text: string): string {
+  if (getSelectionMode(text) === "wordOrPhrase") {
+    return `请解释我在这条推文里选中的这个英文单词或短语：「${text}」。
+
+这次请使用“英语词典讲解”风格，目标是帮助中文用户真正学会它，而不是只看中文翻译。
+
+请严格按这个顺序组织，尽量简洁：
+1. 原词 / 原短语：原样写出
+2. 语境义：它在这条推文里的自然含义
+3. 用法提示：说明它在这里的语气、搭配、感情色彩、隐含意思，或为什么这样说
+4. 常见误区：如果容易按字面误解，或容易和别的表达混淆，顺手提醒一句
+5. 可替换表达：给 1 到 2 个这个语境里可替换的英文表达
+6. 英文例句：给 1 个简短自然的英文例句，并附中文翻译
+
+补充要求：
+- 回答主体用中文，但保留关键英文表达
+- 如果这是俚语、缩写、梗、固定搭配或带语气的说法，要直接点明
+- 不要展开成长篇文章，像老师讲词汇重点
+- 不要脱离当前推文语境，不要只给词典式死定义`
+  }
+
+  return `请解释我在这条推文里选中的这句或这段英文：「${text}」。
+
+这次请使用“英语精读拆解”风格，目标是帮助中文用户真正读懂句子结构、语气和表达方式，而不是只给整句翻译。
+
+请严格按这个顺序组织，尽量简洁：
+1. 原句 / 原文：原样写出
+2. 整体句意：先用自然中文说清整句在这条推文里的意思
+3. 精读拆解：按意群或短语分块解释，每一块都说明它在这里表达什么
+4. 表达重点：指出这句里最值得学习的 1 到 3 个表达、搭配或句式
+5. 语气 / 弦外之音：如果有强调、调侃、反讽、省略、口语感、网络语气，也说明一下
+6. 学习收获：最后用一句话总结“这句英文最值得记住的地方”
+
+补充要求：
+- 回答主体用中文，但保留关键英文表达
+- 不要逐词硬译，要优先解释真实语境
+- 如果字面义和真实语境义不同，要点明
+- 不要长篇大论，像老师带着学生做一句精读
+- 不要脱离当前推文语境`
+}
+
+function buildPatternPrompt(text: string): string {
+  if (getSelectionMode(text) === "wordOrPhrase") {
+    return `请讲解我在这条推文里选中的这个英文短语或表达：「${text}」。
+
+这次请用“表达 / 句型讲解”的方式回答，重点帮助中文用户学会这个表达怎么用，而不是只解释字面意思。
+
+请按这个顺序组织：
+1. 原表达：原样写出
+2. 这类表达在这里是什么意思
+3. 它常见的搭配或句型位置
+4. 使用场景：通常在什么语气或语境里会这样说
+5. 可替换说法：给 1 到 2 个自然替换
+6. 英文例句：给 1 个短例句，并附中文翻译
+
+补充要求：
+- 回答主体用中文，但保留关键英文
+- 如果这是固定搭配、俚语、网络表达或口语说法，要直接点明
+- 不要讲成语法教材，要更像老师讲“这个表达怎么用”
+- 不要脱离当前推文语境`
+  }
+
+  return `请讲解我在这条推文里选中的这个英文句子或片段的句型与表达方式：「${text}」。
+
+这次请用“句型讲解”风格回答，重点帮助中文用户理解这句话是怎么组织出来的、为什么这样说。
+
+请按这个顺序组织：
+1. 原句 / 原文：原样写出
+2. 句型骨架：用最简洁的话概括这句话的结构
+3. 关键表达块：拆出 2 到 4 个关键部分，说明各自作用
+4. 为什么这么说：解释这种表达在推文语境里的效果和语气
+5. 可迁移句型：总结一个值得模仿的表达模板
+6. 仿写例句：给 1 个可模仿的英文例句，并附中文翻译
+
+补充要求：
+- 回答主体用中文，但保留关键英文
+- 不要只做翻译，要解释结构和表达效果
+- 不要脱离当前推文语境
+- 保持简洁，像精讲一个句型`
+}
+
+function buildAssistantDraft(actionId: SelectionActionId): string {
+  switch (actionId) {
+    case "followUp":
+      return "请基于我引用的这段回复，继续展开说明："
+    case "explainReply":
+      return "请结合上下文，详细解释我引用的这段回复，尤其想知道："
+    case "translateReply":
+      return "请把我引用的这段回复翻译成更自然易懂的中文，并顺手解释关键表达。"
+    default:
+      return ""
+  }
+}
+
+function mergeDraftText(currentText: string, nextText: string): string {
+  const trimmedCurrent = currentText.trim()
+  const trimmedNext = nextText.trim()
+
+  if (!trimmedNext) return currentText
+  if (!trimmedCurrent) return nextText
+  if (trimmedCurrent.includes(trimmedNext)) return currentText
+
+  return `${trimmedCurrent}\n\n${trimmedNext}`
+}
+
+function buildQuotedFollowUpMessage(text: string, quotedSelection: QuotedSelectionState): string {
+  const question = text.trim()
+  const fullReply = quotedSelection.fullMessageContent.trim()
+  const excerpt = quotedSelection.text.trim()
+  const replyContext = fullReply && fullReply !== excerpt
+    ? `\n\n这条回复的完整内容如下：\n${fullReply.slice(0, 1200)}`
+    : ""
+
+  return `以下内容来自你之前的一条回复，请结合原回答的上下文继续回答。
+
+我选中的片段是：
+「${excerpt}」
+
+这段片段来自 assistant 的第 ${quotedSelection.messageIndex + 1} 条回复。${replyContext}
+
+我现在想继续追问：
+${question}`
+}
+
+const SELECTION_ACTIONS: Record<SelectionActionId, SelectionAction> = {
+  lookup: { id: "lookup", label: "查词", buildPrompt: buildLookupPrompt },
+  pattern: { id: "pattern", label: "句型讲解", buildPrompt: buildPatternPrompt },
+  followUp: { id: "followUp", label: "追问这段", buildDraft: () => buildAssistantDraft("followUp") },
+  explainReply: { id: "explainReply", label: "解释这段", buildDraft: () => buildAssistantDraft("explainReply") },
+  translateReply: { id: "translateReply", label: "翻译这段", buildDraft: () => buildAssistantDraft("translateReply") },
+  quoteReply: { id: "quoteReply", label: "引用到输入框", buildDraft: () => "" },
+  readAloud: { id: "readAloud", label: "朗读" },
+}
+
+const PRIMARY_TWEET_SELECTION_ACTIONS: Record<SelectionMode, SelectionActionId[]> = {
+  wordOrPhrase: ["lookup", "pattern", "readAloud"],
+  sentenceOrPassage: ["lookup", "pattern", "readAloud"],
+}
+
+const PRIMARY_ASSISTANT_SELECTION_ACTIONS: SelectionActionId[] = ["followUp", "explainReply", "translateReply", "quoteReply", "readAloud"]
+
 // ─── 页面组件 ──────────────────────────────────────────────────────────────────
 export default function HomePage() {
   // ── 推文 feed ──
@@ -112,8 +259,9 @@ export default function HomePage() {
 
   // ── AI 面板：选中推文 + 聊天 ──
   const [selectedTweet, setSelectedTweet] = useState<Tweet | null>(null)
-  const [messages, setMessages] = useState<Message[]>([])
+  const [messages, setMessages] = useState<AiMessage[]>([])
   const [inputText, setInputText] = useState("")
+  const [quotedSelection, setQuotedSelection] = useState<QuotedSelectionState | null>(null)
   const [isChatLoading, setIsChatLoading] = useState(false)
   const [speechStatus, setSpeechStatus] = useState<SpeechStatus>("idle")
   const [speechError, setSpeechError] = useState<string | null>(null)
@@ -142,12 +290,9 @@ export default function HomePage() {
   const sheetTouchStartY = useRef(0)
   const sheetTouchStartH = useRef(0)
 
-  // ── 查词气泡 ──
-  const [lookupPopup, setLookupPopup] = useState<LookupPopupState | null>(null)
-  const [lookupResult, setLookupResult] = useState<LookupResult | null>(null)
-  const [isLookupLoading, setIsLookupLoading] = useState(false)
-  // 手机端：选中文本后先暂存，等用户点击「查词」按钮才触发查询
-  const [pendingLookup, setPendingLookup] = useState<{ text: string; anchorX: number; anchorY: number; tweet: Tweet } | null>(null)
+  // 选区动作菜单：保存选中文本、锚点和菜单展开状态
+  const [selectionMenu, setSelectionMenu] = useState<SelectionMenuState | null>(null)
+  const [pendingSelectionActionId, setPendingSelectionActionId] = useState<SelectionActionId | null>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -197,8 +342,8 @@ export default function HomePage() {
         }
       } catch {}
     }
-    let raf1: number, raf2: number
-    raf1 = requestAnimationFrame(() => {
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
       raf2 = requestAnimationFrame(() => setAllowChatTransition(true))
     })
     return () => {
@@ -213,8 +358,8 @@ export default function HomePage() {
   // 恢复打开后再两帧开启过渡（避免初次展开有动画）
   useEffect(() => {
     if (!effectiveChatOpen || !justRestoredOpenRef.current) return
-    let raf1: number, raf2: number
-    raf1 = requestAnimationFrame(() => {
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
       raf2 = requestAnimationFrame(() => {
         justRestoredOpenRef.current = false
         setAllowChatTransition(true)
@@ -409,11 +554,32 @@ export default function HomePage() {
   }, [messages])
 
   // ── 发送消息（SSE 流式）──
-  const sendMessage = useCallback(async (text: string) => {
-    if (!text.trim() || isChatLoading || !selectedTweet) return
-    const userMsg: Message = { role: "user", content: text }
-    setMessages((prev) => [...prev, userMsg])
+  const sendMessage = useCallback(async (
+    text: string,
+    options?: { tweetOverride?: Tweet; includeQuotedSelection?: boolean },
+  ) => {
+    const targetTweet = options?.tweetOverride ?? selectedTweet
+    if (!text.trim() || isChatLoading || !targetTweet) return
+
+    const shouldResetMessages = selectedTweet?.id !== targetTweet.id
+    const baseMessages = shouldResetMessages ? [] : messages
+    const trimmedText = text.trim()
+    const activeQuotedSelection = options?.includeQuotedSelection === false || shouldResetMessages
+      ? null
+      : quotedSelection
+    const requestText = activeQuotedSelection
+      ? buildQuotedFollowUpMessage(trimmedText, activeQuotedSelection)
+      : trimmedText
+    const userMsg: AiMessage = {
+      role: "user",
+      content: trimmedText,
+      ...(activeQuotedSelection && { quoted: { text: activeQuotedSelection.text } }),
+    }
+
+    if (shouldResetMessages) setSelectedTweet(targetTweet)
+    setMessages([...baseMessages, userMsg])
     setInputText("")
+    setQuotedSelection(null)
     setIsChatLoading(true)
     setSpeechError(null)
     // 手机端：消息发送时确保抽屉打开
@@ -425,7 +591,10 @@ export default function HomePage() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: [...messages, userMsg], sceneMeta: buildSceneMeta(selectedTweet) }),
+        body: JSON.stringify({
+          messages: [...baseMessages, { role: "user", content: requestText }],
+          sceneMeta: buildSceneMeta(targetTweet),
+        }),
       })
       if (!res.ok) throw new Error(`Chat API ${res.status}`)
       if (!res.body) throw new Error("No response body")
@@ -470,7 +639,7 @@ export default function HomePage() {
       }
     } catch { setSpeechError("对话请求失败，请稍后重试") }
     finally { setIsChatLoading(false) }
-  }, [isChatLoading, selectedTweet, messages, isMobile, sheetState])
+  }, [isChatLoading, selectedTweet, messages, quotedSelection, isMobile, sheetState])
 
   const handleSubmit = (e: React.FormEvent) => { e.preventDefault(); sendMessage(inputText) }
 
@@ -488,90 +657,143 @@ export default function HomePage() {
     }
   }
 
-  // ── 查词 ──
-  const handleTextSelect = useCallback(async (text: string, anchorX: number, anchorY: number, tweet: Tweet) => {
-    setLookupPopup({ text, anchorX, anchorY, tweet })
-    setLookupResult(null)
-    setIsLookupLoading(true)
-    try {
-      const res = await fetch("/api/lookup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, context: tweet.text }),
-      })
-      const data: LookupResult = await res.json()
-      setLookupResult(data)
-    } catch {
-      setLookupResult({ translation: "查询失败" })
-    } finally {
-      setIsLookupLoading(false)
+  const handleSpeechToggle = () => {
+    if (isSpeechEnabled) {
+      whisperSpeechService.stopSpeaking()
+      setSpeechError(null)
     }
+    setIsSpeechEnabled(!isSpeechEnabled)
+  }
+
+  const closeSelectionMenu = useCallback((clearSelection = false) => {
+    setSelectionMenu(null)
+    setPendingSelectionActionId(null)
+    if (clearSelection) window.getSelection()?.removeAllRanges()
   }, [])
 
-  // 点击气泡外部关闭
-  useEffect(() => {
-    if (!lookupPopup) return
-    const handler = (e: MouseEvent | TouchEvent) => {
-      const target = e.target as HTMLElement
-      if (!target.closest("[data-lookup-popup]")) {
-        setLookupPopup(null)
-        window.getSelection()?.removeAllRanges()
-      }
-    }
-    document.addEventListener("mousedown", handler)
-    document.addEventListener("touchstart", handler)
-    return () => { document.removeEventListener("mousedown", handler); document.removeEventListener("touchstart", handler) }
-  }, [lookupPopup])
+  const openChatForSelection = useCallback((text: string, tweet: Tweet) => {
+    if (isMobile) setSheetState("half")
+    else if (!effectiveChatOpen) setIsChatOpen(true)
+    setQuotedSelection(null)
+    return sendMessage(text, { tweetOverride: tweet, includeQuotedSelection: false })
+  }, [effectiveChatOpen, isMobile, sendMessage])
 
-  // 点击「查词」按钮外部时关闭暂存查词
+  const focusChatInput = useCallback(() => {
+    if (isMobile) setSheetState("half")
+    else if (!effectiveChatOpen) setIsChatOpen(true)
+    requestAnimationFrame(() => textareaRef.current?.focus())
+  }, [effectiveChatOpen, isMobile])
+
+  const handleSelectionAction = useCallback(async (actionId: SelectionActionId, selection: SelectionMenuState) => {
+    const { text, tweet } = selection
+
+    if (actionId === "readAloud") {
+      setSpeechError(null)
+      setPendingSelectionActionId("readAloud")
+      try {
+        await whisperSpeechService.speak(text)
+      } finally {
+        setPendingSelectionActionId((current) => current === "readAloud" ? null : current)
+      }
+      return
+    }
+
+    if (selection.source === "assistantReply") {
+      setQuotedSelection({
+        text,
+        sourceRole: "assistant",
+        messageIndex: selection.messageIndex ?? messages.length - 1,
+        fullMessageContent: selection.fullMessageContent ?? text,
+      })
+      setInputText((current) => mergeDraftText(current, SELECTION_ACTIONS[actionId].buildDraft?.() ?? ""))
+      closeSelectionMenu(true)
+      focusChatInput()
+      return
+    }
+
+    const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text)
+    if (!prompt) return
+    closeSelectionMenu(true)
+    await openChatForSelection(prompt, tweet)
+  }, [closeSelectionMenu, focusChatInput, messages.length, openChatForSelection])
+
+  const handleAssistantTextSelect = useCallback((selection: {
+    text: string
+    anchorX: number
+    anchorY: number
+    messageIndex: number
+    fullMessageContent: string
+  }) => {
+    if (!selectedTweet) return
+    setPendingSelectionActionId(null)
+    setSelectionMenu({
+      text: selection.text,
+      anchorX: selection.anchorX,
+      anchorY: selection.anchorY,
+      tweet: selectedTweet,
+      mode: getSelectionMode(selection.text),
+      source: "assistantReply",
+      messageIndex: selection.messageIndex,
+      fullMessageContent: selection.fullMessageContent,
+    })
+  }, [selectedTweet])
+
+  // 点击菜单外部时关闭选区菜单
   // 只监听 mousedown（不监听 touchstart），避免用户拖动选区手柄时误触发关闭
   useEffect(() => {
-    if (!pendingLookup) return
+    if (!selectionMenu) return
     const handler = (e: MouseEvent) => {
       const target = e.target as HTMLElement
-      if (!target.closest("[data-pending-lookup]")) {
-        setPendingLookup(null)
-        window.getSelection()?.removeAllRanges()
+      if (!target.closest("[data-selection-action-menu]")) {
+        closeSelectionMenu(true)
       }
     }
     document.addEventListener("mousedown", handler)
     return () => document.removeEventListener("mousedown", handler)
-  }, [pendingLookup])
+  }, [selectionMenu, closeSelectionMenu])
 
-  // selectionchange：用户拖动手柄扩大/缩小选区时，只更新文本（不更新位置，避免按钮跳动）
-  const pendingLookupRef = useRef(pendingLookup)
-  pendingLookupRef.current = pendingLookup
+  // selectionchange：用户拖动手柄扩大/缩小选区时，只更新文本（不更新位置，避免菜单跳动）
+  const selectionMenuRef = useRef(selectionMenu)
+  selectionMenuRef.current = selectionMenu
   useEffect(() => {
     const handleSelectionChange = () => {
-      if (!pendingLookupRef.current) return
+      if (!selectionMenuRef.current) return
       const sel = window.getSelection()
       const text = sel?.toString().trim()
       if (!text) {
-        setPendingLookup(null)
+        closeSelectionMenu()
         return
       }
-      // 只更新 text，按钮位置保持初始 readSelection 时的 rect.bottom
-      setPendingLookup(prev => prev ? { ...prev, text } : null)
+      // 只更新 text，菜单位置保持初始 readSelection 时的 rect.bottom
+      setSelectionMenu((prev) => prev ? {
+        ...prev,
+        text,
+        mode: getSelectionMode(text),
+      } : null)
     }
     document.addEventListener("selectionchange", handleSelectionChange)
     return () => document.removeEventListener("selectionchange", handleSelectionChange)
-  }, [])
+  }, [closeSelectionMenu])
 
-  // ── 推文点击：手机展开底部抽屉；桌面打开 AI 面板 ──
-  // 仅选中推文（文章 onClick：手机端只高亮，桌面端顺带开 AI）
-  const handleTweetClick = (tweet: Tweet) => {
-    if (selectedTweet?.id !== tweet.id) { setSelectedTweet(tweet); setMessages([]) }
-    if (!isMobile && !effectiveChatOpen) setIsChatOpen(true)
-  }
-
-  // 选中推文 + 打开 AI（Sparkles 按钮专用）
+  // 选中推文 + 打开 AI（推文分析按钮专用）
   const handleOpenAI = (tweet: Tweet) => {
-    if (selectedTweet?.id !== tweet.id) { setSelectedTweet(tweet); setMessages([]) }
+    if (selectedTweet?.id !== tweet.id) {
+      setSelectedTweet(tweet)
+      setMessages([])
+      setQuotedSelection(null)
+    }
     if (isMobile) setSheetState("half")
     else if (!effectiveChatOpen) setIsChatOpen(true)
   }
 
   const noTransition = !allowChatTransition || isResizing || justRestoredOpenRef.current
+  const primarySelectionActions = selectionMenu
+    ? (
+      selectionMenu.source === "assistantReply"
+        ? PRIMARY_ASSISTANT_SELECTION_ACTIONS
+        : PRIMARY_TWEET_SELECTION_ACTIONS[selectionMenu.mode]
+    ).map((id) => SELECTION_ACTIONS[id])
+    : []
 
   return (
     <div
@@ -666,11 +888,17 @@ export default function HomePage() {
                       tweet={tweet}
                       index={idx}
                       isSelected={selectedTweet?.id === tweet.id}
-                      onClick={() => handleTweetClick(tweet)}
                       onAiClick={() => handleOpenAI(tweet)}
                       onTextSelect={(text, ax, ay) => {
-                        // 统一：选中后显示「查词」按钮，点击才查询
-                        setPendingLookup({ text, anchorX: ax, anchorY: ay, tweet })
+                        setPendingSelectionActionId(null)
+                        setSelectionMenu({
+                          text,
+                          anchorX: ax,
+                          anchorY: ay,
+                          tweet,
+                          mode: getSelectionMode(text),
+                          source: "tweet",
+                        })
                       }}
                       isMobile={isMobile}
                     />
@@ -714,226 +942,35 @@ export default function HomePage() {
 
           {/* ── 桌面端：AI 面板 ── */}
           {!isMobile && (
-            <div
-              className={`flex flex-col shrink-0 overflow-hidden ${!effectiveChatOpen ? "pointer-events-none" : ""}`}
-              style={{
-                width: effectiveChatOpen ? chatWidth : 0,
-                minWidth: 0,
-                transition: noTransition ? "none" : "width 0.55s cubic-bezier(0.25, 0.1, 0.25, 1)",
-              }}
-            >
-              <div
-                className="flex flex-col flex-1 min-w-0 h-full bg-white/90 border-l border-gray-200 backdrop-blur-sm"
-                style={{
-                  width: mounted ? chatWidth : DEFAULT_CHAT_WIDTH,
-                  minWidth: mounted ? MIN_CHAT_WIDTH : DEFAULT_CHAT_WIDTH,
-                  transform: effectiveChatOpen ? "translateX(0)" : "translateX(100%)",
-                  transition: noTransition ? "none" : "transform 0.3s cubic-bezier(0.25, 0.1, 0.25, 1)",
-                }}
-              >
-                {/* 标题栏 */}
-                <div className="shrink-0 px-4 py-2 border-b border-gray-200 bg-gray-50/80 flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <h3 className="text-sm font-semibold text-gray-700">AI 解读助手</h3>
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      {selectedTweet ? `@${selectedTweet.author.userName}` : "点击左侧推文开始分析"}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      type="button" variant="outline" size="sm"
-                      onClick={() => { if (isSpeechEnabled) { whisperSpeechService.stopSpeaking(); setSpeechError(null) }; setIsSpeechEnabled(!isSpeechEnabled) }}
-                      className={`shrink-0 h-8 px-2 border ${voiceColor.bg} ${voiceColor.border} ${voiceColor.text} ${voiceColor.hover}`}
-                      title={isSpeechEnabled ? "关闭语音朗读" : "开启语音朗读"}
-                    >
-                      {isSpeechEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-                      <span className="ml-1 text-xs">{isSpeechEnabled ? "语音开" : "语音关"}</span>
-                    </Button>
-                    <Button
-                      type="button" variant="ghost" size="icon"
-                      onClick={() => setIsChatOpen(false)}
-                      className="h-8 w-8 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md"
-                      title="关闭"
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-
-                {/* 选中推文预览 */}
-                {selectedTweet && (
-                  <div className="shrink-0 border-b border-gray-200/80 bg-gray-50/50 px-4 py-3">
-                    <div className="flex items-start gap-2.5">
-                      {selectedTweet.author.profilePicture ? (
-                        <Image
-                          src={selectedTweet.author.profilePicture}
-                          alt={selectedTweet.author.name}
-                          width={32} height={32}
-                          className="w-8 h-8 rounded-full object-cover shrink-0"
-                          unoptimized
-                        />
-                      ) : (
-                        <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 text-xs font-bold shrink-0">
-                          {selectedTweet.author.name?.[0] ?? "?"}
-                        </div>
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-baseline gap-1 flex-wrap">
-                          <span className="text-xs font-semibold text-gray-900">{selectedTweet.author.name}</span>
-                          <span className="text-xs text-gray-400">@{selectedTweet.author.userName}</span>
-                          <span className="text-xs text-gray-300">·</span>
-                          <span className="text-xs text-gray-400">{formatRelativeTime(selectedTweet.createdAt)}</span>
-                        </div>
-                        <p className="mt-1 text-xs text-gray-700 leading-relaxed whitespace-pre-wrap break-words line-clamp-5">
-                          {selectedTweet.text}
-                        </p>
-                        {selectedTweet.url && (
-                          <a
-                            href={selectedTweet.url} target="_blank" rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-[10px] text-blue-400 hover:text-blue-600 mt-1"
-                          >
-                            <ExternalLink className="h-2.5 w-2.5" />查看原文
-                          </a>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* 消息列表 */}
-                <div className="flex-1 overflow-y-auto p-4 space-y-4 hide-vertical-scrollbar">
-                  {!selectedTweet && (
-                    <div className="flex flex-col items-center justify-center h-full text-center gap-3 py-12">
-                      <Sparkles className="h-10 w-10 text-gray-200" />
-                      <p className="text-sm font-medium text-gray-400">点击左侧推文</p>
-                      <p className="text-xs text-gray-300">AI 将为你解读该推文</p>
-                    </div>
-                  )}
-                  {selectedTweet && messages.length === 0 && (
-                    <div className="text-center text-sm text-gray-500 mt-8 space-y-2">
-                      <p className="font-medium">有什么问题想了解吗？</p>
-                      <p className="text-xs text-gray-400">点击下方快捷按钮，或直接输入问题</p>
-                    </div>
-                  )}
-                  {messages.map((msg, i) => (
-                    <div key={i} className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
-                      {msg.role === "user" && (
-                        <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium bg-violet-500 text-white">我</div>
-                      )}
-                      <div className={`flex-1 min-w-0 text-sm leading-relaxed ${msg.role === "user" ? "text-right" : "text-gray-800"}`}>
-                        {msg.role === "user" ? (
-                          <div className="inline-block max-w-[85%] rounded-2xl bg-violet-50 border border-violet-100 px-4 py-2 text-gray-900 text-left">
-                            {msg.content}
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            <div className="rounded-2xl bg-gray-50 border border-gray-100 px-4 py-2 whitespace-pre-wrap">
-                              {msg.content ? extractSpeakContent(msg.content) : (
-                                <span className="inline-flex gap-0.5 text-gray-400">
-                                  <span className="animate-dot-flash-1">·</span>
-                                  <span className="animate-dot-flash-2">·</span>
-                                  <span className="animate-dot-flash-3">·</span>
-                                </span>
-                              )}
-                            </div>
-                            {i === messages.length - 1 && speechStatus === "speaking" && (
-                              <div className="flex items-center gap-2 text-xs text-emerald-600 pt-1">
-                                <span className="flex items-end gap-0.5 h-4">
-                                  {[1,2,3,4].map((n) => (
-                                    <span key={n} className={`w-1 bg-emerald-500 rounded-full origin-bottom animate-sound-wave animate-sound-wave-${n} ${n % 2 === 0 ? "h-4" : "h-3"} inline-block`} />
-                                  ))}
-                                </span>
-                                <Volume2 className="h-3.5 w-3.5 shrink-0" />
-                                正在播放
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                  {isChatLoading && (
-                    <div className="flex gap-3">
-                      <div className="flex-1 min-w-0">
-                        <div className="inline-block rounded-2xl bg-gray-50 border border-gray-100 px-4 py-2 text-sm text-gray-500">
-                          <span className="inline-flex gap-0.5">
-                            <span className="animate-dot-flash-1">·</span>
-                            <span className="animate-dot-flash-2">·</span>
-                            <span className="animate-dot-flash-3">·</span>
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  <div ref={messagesEndRef} />
-                </div>
-
-                {/* 快捷提问 */}
-                {selectedTweet && (
-                  <div className="shrink-0 px-4 py-2 border-t border-gray-100 bg-gray-50/80">
-                    <div className="flex flex-wrap gap-x-3 gap-y-2 pt-1">
-                      {PRESET_PROMPTS.map((p, i) => {
-                        const c = pastelColors[i % pastelColors.length]
-                        return (
-                          <Button
-                            key={p.label} type="button" variant="outline" size="sm"
-                            disabled={isChatLoading || speechStatus === "recording" || speechStatus === "processing"}
-                            onClick={() => sendMessage(p.text)}
-                            className={`text-xs h-9 px-4 rounded-xl border ${c.bg} ${c.border} ${c.text} ${c.hover} disabled:opacity-50 transition-all`}
-                          >
-                            {p.label}
-                          </Button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* 输入框 */}
-                <div className="shrink-0 border-t border-gray-200 p-4 bg-gray-50/80">
-                  {speechError && (
-                    <div className="mb-2 text-xs text-red-600 flex items-center justify-between gap-2">
-                      <span>{speechError}</span>
-                      <Button variant="ghost" size="sm" className="h-6 px-1 text-red-600" onClick={() => setSpeechError(null)}>关闭</Button>
-                    </div>
-                  )}
-                  <form onSubmit={handleSubmit}>
-                    <div className="flex flex-col rounded-lg border border-gray-300 bg-white shadow-sm focus-within:border-emerald-400 focus-within:ring-1 focus-within:ring-emerald-400/20 transition-all">
-                      <Textarea
-                        ref={textareaRef}
-                        value={inputText}
-                        onChange={(e) => setInputText(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        placeholder={selectedTweet ? "输入或语音...（Shift+Enter 换行）" : "请先点击左侧推文..."}
-                        disabled={isChatLoading || !selectedTweet || speechStatus === "processing"}
-                        className="block w-full min-h-[44px] max-h-[120px] text-sm resize-none pt-2.5 px-3 border-0 focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent placeholder:text-gray-400"
-                        rows={1}
-                      />
-                      <div className="flex items-center justify-end gap-1.5 p-1.5 shrink-0">
-                        <Button
-                          type="button" size="icon" variant="ghost"
-                          onClick={handleVoiceToggle}
-                          disabled={isChatLoading || !selectedTweet || speechStatus === "processing"}
-                          className="h-8 w-8 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-md disabled:opacity-50 transition-colors"
-                          title={speechStatus === "recording" ? "停止录音" : "语音输入"}
-                        >
-                          {speechStatus === "recording"
-                            ? <StopCircle className="h-4 w-4 text-red-500" />
-                            : <Mic className="h-4 w-4" />}
-                        </Button>
-                        <Button
-                          type="submit" size="icon"
-                          disabled={!inputText.trim() || isChatLoading || !selectedTweet}
-                          className="h-8 w-8 bg-emerald-600 hover:bg-emerald-700 rounded-md disabled:opacity-50 transition-colors shadow-sm"
-                        >
-                          <Send className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  </form>
-                </div>
-              </div>
-            </div>
+            <AiPanel
+              variant="desktop"
+              selectedTweet={selectedTweet}
+              messages={messages}
+              inputText={inputText}
+              quotedSelection={quotedSelection}
+              isChatLoading={isChatLoading}
+              speechStatus={speechStatus}
+              speechError={speechError}
+              isSpeechEnabled={isSpeechEnabled}
+              onToggleSpeech={handleSpeechToggle}
+              onClose={() => setIsChatOpen(false)}
+              onSendPreset={(text) => sendMessage(text, { includeQuotedSelection: false })}
+              onInputChange={(value) => setInputText(value)}
+              onAssistantTextSelect={handleAssistantTextSelect}
+              onClearQuotedSelection={() => setQuotedSelection(null)}
+              onSubmit={handleSubmit}
+              onKeyDown={handleKeyDown}
+              onVoiceToggle={handleVoiceToggle}
+              onDismissSpeechError={() => setSpeechError(null)}
+              messagesEndRef={messagesEndRef}
+              textareaRef={textareaRef}
+              formatTweetText={smartCase}
+              renderAssistantContent={extractSpeakContent}
+              width={mounted ? chatWidth : DEFAULT_CHAT_WIDTH}
+              minWidth={mounted ? MIN_CHAT_WIDTH : DEFAULT_CHAT_WIDTH}
+              isOpen={effectiveChatOpen}
+              noTransition={noTransition}
+            />
           )}
 
           {/* ── 桌面端：悬浮打开按钮 ── */}
@@ -951,215 +988,37 @@ export default function HomePage() {
 
           {/* ── 手机端：底部抽屉 ── */}
           {isMobile && (
-            <div
-              className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-2xl overflow-hidden flex flex-col"
-              style={{
-                height: sheetHeight,
-                boxShadow: "0 -4px 32px rgba(0,0,0,0.14), 0 -1px 6px rgba(0,0,0,0.06)",
-                transition: isDragging ? "none" : "height 0.32s cubic-bezier(0.32,0.72,0,1)",
-              }}
-            >
-              {/* 拖拽手柄 */}
-              <div
-                className="shrink-0 pt-2.5 pb-1 flex justify-center touch-none select-none cursor-grab active:cursor-grabbing"
-                onTouchStart={handleSheetDragStart}
-                onTouchMove={handleSheetDragMove}
-                onTouchEnd={handleSheetDragEnd}
-              >
-                <div className="w-9 h-1 bg-gray-300 rounded-full" />
-              </div>
-
-              {/* Half / Full 状态：完整 AI 聊天 */}
-              <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
-
-                  {/* AI 面板标题 */}
-                  <div className="shrink-0 px-4 py-2 border-b border-gray-200 bg-gray-50 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <Sparkles className="h-4 w-4 text-emerald-600 shrink-0" />
-                      <h3 className="text-sm font-semibold text-gray-700">AI 解读助手</h3>
-                    </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <Button
-                        type="button" variant="outline" size="sm"
-                        onClick={() => { if (isSpeechEnabled) { whisperSpeechService.stopSpeaking(); setSpeechError(null) }; setIsSpeechEnabled(!isSpeechEnabled) }}
-                        className={`h-8 px-2 border ${voiceColor.bg} ${voiceColor.border} ${voiceColor.text} ${voiceColor.hover}`}
-                        title={isSpeechEnabled ? "关闭语音" : "开启语音"}
-                      >
-                        {isSpeechEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-                      </Button>
-                      {sheetState === "full" && (
-                        <Button type="button" variant="ghost" size="icon"
-                          onClick={() => setSheetState("half")}
-                          className="h-10 w-10 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md touch-manipulation"
-                          title="缩小"
-                        >
-                          <ChevronDown className="h-5 w-5" />
-                        </Button>
-                      )}
-                      {sheetState === "half" && (
-                        <Button type="button" variant="ghost" size="icon"
-                          onClick={() => setSheetState("hidden")}
-                          className="h-10 w-10 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md touch-manipulation"
-                          title="收起"
-                        >
-                          <ChevronDown className="h-5 w-5" />
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* 消息列表 */}
-                  <div className="flex-1 overflow-y-auto p-4 space-y-4 hide-vertical-scrollbar" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-                    {!selectedTweet && (
-                      <div className="flex flex-col items-center justify-center h-full text-center gap-3 py-8">
-                        <Sparkles className="h-8 w-8 text-gray-200" />
-                        <p className="text-sm font-medium text-gray-400">点击上方推文</p>
-                        <p className="text-xs text-gray-300">AI 将为你解读该推文</p>
-                      </div>
-                    )}
-                    {/* 推文上下文卡片：始终位于对话最顶部 */}
-                    {selectedTweet && (
-                      <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 mb-1">
-                        <div className="flex items-center gap-2 mb-1.5">
-                          {selectedTweet.author.profilePicture ? (
-                            <img src={selectedTweet.author.profilePicture} alt={selectedTweet.author.name}
-                              className="w-6 h-6 rounded-full object-cover shrink-0" />
-                          ) : (
-                            <div className="w-6 h-6 rounded-full bg-gray-200 shrink-0 flex items-center justify-center text-xs text-gray-500">
-                              {selectedTweet.author.name?.[0]}
-                            </div>
-                          )}
-                          <span className="text-xs font-semibold text-gray-800 truncate">{selectedTweet.author.name}</span>
-                          <span className="text-xs text-gray-400 truncate">@{selectedTweet.author.userName}</span>
-                        </div>
-                        <p className="text-xs text-gray-700 leading-relaxed">{selectedTweet.text}</p>
-                      </div>
-                    )}
-                    {selectedTweet && messages.length === 0 && (
-                      <div className="text-center text-sm text-gray-500 mt-6 space-y-2">
-                        <p className="font-medium">有什么问题想了解吗？</p>
-                        <p className="text-xs text-gray-400">点击下方快捷按钮，或直接输入</p>
-                      </div>
-                    )}
-                    {messages.map((msg, i) => (
-                      <div key={i} className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
-                        {msg.role === "user" && (
-                          <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium bg-violet-500 text-white">我</div>
-                        )}
-                        <div className={`flex-1 min-w-0 text-sm leading-relaxed ${msg.role === "user" ? "text-right" : "text-gray-800"}`}>
-                          {msg.role === "user" ? (
-                            <div className="inline-block max-w-[85%] rounded-2xl bg-violet-50 border border-violet-100 px-4 py-2 text-gray-900 text-left">
-                              {msg.content}
-                            </div>
-                          ) : (
-                            <div className="space-y-2">
-                              <div className="rounded-2xl bg-gray-50 border border-gray-100 px-4 py-2 whitespace-pre-wrap">
-                                {msg.content ? extractSpeakContent(msg.content) : (
-                                  <span className="inline-flex gap-0.5 text-gray-400">
-                                    <span className="animate-dot-flash-1">·</span>
-                                    <span className="animate-dot-flash-2">·</span>
-                                    <span className="animate-dot-flash-3">·</span>
-                                  </span>
-                                )}
-                              </div>
-                              {i === messages.length - 1 && speechStatus === "speaking" && (
-                                <div className="flex items-center gap-2 text-xs text-emerald-600 pt-1">
-                                  <span className="flex items-end gap-0.5 h-4">
-                                    {[1,2,3,4].map((n) => (
-                                      <span key={n} className={`w-1 bg-emerald-500 rounded-full origin-bottom animate-sound-wave animate-sound-wave-${n} ${n % 2 === 0 ? "h-4" : "h-3"} inline-block`} />
-                                    ))}
-                                  </span>
-                                  <Volume2 className="h-3.5 w-3.5 shrink-0" />
-                                  正在播放
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                    {isChatLoading && (
-                      <div className="flex gap-3">
-                        <div className="flex-1 min-w-0">
-                          <div className="inline-block rounded-2xl bg-gray-50 border border-gray-100 px-4 py-2 text-sm text-gray-500">
-                            <span className="inline-flex gap-0.5">
-                              <span className="animate-dot-flash-1">·</span>
-                              <span className="animate-dot-flash-2">·</span>
-                              <span className="animate-dot-flash-3">·</span>
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    <div ref={messagesEndRef} />
-                  </div>
-
-                  {/* 快捷提问 */}
-                  {selectedTweet && (
-                    <div className="shrink-0 px-4 py-2 border-t border-gray-100 bg-gray-50/80">
-                      <div className="flex flex-wrap gap-x-3 gap-y-2 pt-1">
-                        {PRESET_PROMPTS.map((p, i) => {
-                          const c = pastelColors[i % pastelColors.length]
-                          return (
-                            <Button
-                              key={p.label} type="button" variant="outline" size="sm"
-                              disabled={isChatLoading || speechStatus === "recording" || speechStatus === "processing"}
-                              onClick={() => sendMessage(p.text)}
-                              className={`text-xs h-9 px-4 rounded-xl border ${c.bg} ${c.border} ${c.text} ${c.hover} disabled:opacity-50 transition-all`}
-                            >
-                              {p.label}
-                            </Button>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* 输入框 */}
-                  <div className="shrink-0 border-t border-gray-200 p-3 bg-gray-50/80">
-                    {speechError && (
-                      <div className="mb-2 text-xs text-red-600 flex items-center justify-between gap-2">
-                        <span>{speechError}</span>
-                        <Button variant="ghost" size="sm" className="h-6 px-1 text-red-600" onClick={() => setSpeechError(null)}>关闭</Button>
-                      </div>
-                    )}
-                    <form onSubmit={handleSubmit}>
-                      <div className="flex flex-col rounded-lg border border-gray-300 bg-white shadow-sm focus-within:border-emerald-400 focus-within:ring-1 focus-within:ring-emerald-400/20 transition-all">
-                        <Textarea
-                          ref={textareaRef}
-                          value={inputText}
-                          onChange={(e) => setInputText(e.target.value)}
-                          onKeyDown={handleKeyDown}
-                          placeholder={selectedTweet ? "输入或语音..." : "请先点击推文..."}
-                          disabled={isChatLoading || !selectedTweet || speechStatus === "processing"}
-                          className="block w-full min-h-[44px] max-h-[120px] text-sm resize-none pt-2.5 px-3 border-0 focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent placeholder:text-gray-400"
-                          rows={1}
-                        />
-                        <div className="flex items-center justify-end gap-1.5 p-1.5 shrink-0">
-                          <Button
-                            type="button" size="icon" variant="ghost"
-                            onClick={handleVoiceToggle}
-                            disabled={isChatLoading || !selectedTweet || speechStatus === "processing"}
-                            className="h-8 w-8 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-md disabled:opacity-50 transition-colors"
-                            title={speechStatus === "recording" ? "停止录音" : "语音输入"}
-                          >
-                            {speechStatus === "recording"
-                              ? <StopCircle className="h-4 w-4 text-red-500" />
-                              : <Mic className="h-4 w-4" />}
-                          </Button>
-                          <Button
-                            type="submit" size="icon"
-                            disabled={!inputText.trim() || isChatLoading || !selectedTweet}
-                            className="h-8 w-8 bg-emerald-600 hover:bg-emerald-700 rounded-md disabled:opacity-50 transition-colors shadow-sm"
-                          >
-                            <Send className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </div>
-                    </form>
-                  </div>
-                </div>
-            </div>
+            <AiPanel
+              variant="mobile"
+              selectedTweet={selectedTweet}
+              messages={messages}
+              inputText={inputText}
+              quotedSelection={quotedSelection}
+              isChatLoading={isChatLoading}
+              speechStatus={speechStatus}
+              speechError={speechError}
+              isSpeechEnabled={isSpeechEnabled}
+              onToggleSpeech={handleSpeechToggle}
+              onClose={() => setSheetState(sheetState === "full" ? "half" : "hidden")}
+              onSendPreset={(text) => sendMessage(text, { includeQuotedSelection: false })}
+              onInputChange={(value) => setInputText(value)}
+              onAssistantTextSelect={handleAssistantTextSelect}
+              onClearQuotedSelection={() => setQuotedSelection(null)}
+              onSubmit={handleSubmit}
+              onKeyDown={handleKeyDown}
+              onVoiceToggle={handleVoiceToggle}
+              onDismissSpeechError={() => setSpeechError(null)}
+              messagesEndRef={messagesEndRef}
+              textareaRef={textareaRef}
+              formatTweetText={smartCase}
+              renderAssistantContent={extractSpeakContent}
+              sheetHeight={sheetHeight}
+              isDragging={isDragging}
+              sheetState={sheetState}
+              onHandleTouchStart={handleSheetDragStart}
+              onHandleTouchMove={handleSheetDragMove}
+              onHandleTouchEnd={handleSheetDragEnd}
+            />
           )}
         </div>
       </div>
@@ -1176,54 +1035,17 @@ export default function HomePage() {
         </button>
       )}
 
-      {/* ── 手机端「查词」确认按钮（选中文字后出现） ── */}
-      {pendingLookup && (
-        <div
-          data-pending-lookup
-          className="fixed z-[200] pointer-events-auto"
-          style={{
-            left: Math.max(8, Math.min(pendingLookup.anchorX - 28, (typeof window !== "undefined" ? window.innerWidth : 375) - 72)),
-            top: Math.min(
-              pendingLookup.anchorY + 8,
-              (typeof window !== "undefined" ? window.innerHeight : 800) - 48
-            ),
-          }}
-        >
-          <button
-            className="px-3.5 py-1.5 bg-gray-900 text-white text-xs font-semibold rounded-full shadow-xl whitespace-nowrap touch-manipulation active:scale-95 transition-transform"
-            onClick={() => {
-              const { text, anchorX, anchorY, tweet } = pendingLookup
-              setPendingLookup(null)
-              window.getSelection()?.removeAllRanges()
-              handleTextSelect(text, anchorX, anchorY, tweet)
-            }}
-          >
-            查词
-          </button>
-        </div>
-      )}
-
-      {/* ── 查词气泡 ── */}
-      {lookupPopup && (
-        <LookupPopupCard
-          text={lookupPopup.text}
-          anchorX={lookupPopup.anchorX}
-          anchorY={lookupPopup.anchorY}
-          result={lookupResult}
-          loading={isLookupLoading}
-          onClose={() => setLookupPopup(null)}
-          onAskAI={() => {
-            const { tweet, text } = lookupPopup
-            setLookupPopup(null)
-            if (selectedTweet?.id !== tweet.id) { setSelectedTweet(tweet); setMessages([]) }
-            setInputText(`请解释「${text}」在这条推文中的含义`)
-            if (isMobile) {
-              setSheetState("half")
-              setTimeout(() => textareaRef.current?.focus(), 100)
-            } else {
-              setIsChatOpen(true)
-              setTimeout(() => textareaRef.current?.focus(), 100)
-            }
+      {/* ── 选区动作菜单（选中文字后出现） ── */}
+      {selectionMenu && (
+        <SelectionActionMenu
+          anchorX={selectionMenu.anchorX}
+          anchorY={selectionMenu.anchorY}
+          primaryActions={primarySelectionActions}
+          loadingActionId={pendingSelectionActionId}
+          onAction={(actionId) => {
+            const action = selectionMenu ? SELECTION_ACTIONS[actionId as SelectionActionId] : null
+            if (!action || !selectionMenu || pendingSelectionActionId === action.id) return
+            void handleSelectionAction(action.id, selectionMenu)
           }}
         />
       )}
@@ -1233,9 +1055,9 @@ export default function HomePage() {
 
 // ─── TweetCard 组件 ────────────────────────────────────────────────────────────
 function TweetCard({
-  tweet, index, isSelected, onClick, onTextSelect, onAiClick, isMobile,
+  tweet, index, isSelected, onTextSelect, onAiClick, isMobile,
 }: {
-  tweet: Tweet; index: number; isSelected: boolean; onClick: () => void
+  tweet: Tweet; index: number; isSelected: boolean
   onTextSelect?: (text: string, anchorX: number, anchorY: number) => void
   onAiClick: () => void
   isMobile: boolean
@@ -1267,12 +1089,8 @@ function TweetCard({
         isSelected
           ? "bg-blue-50/90 border-l-[3px] border-blue-400"
           : "bg-white/75 hover:bg-white/90"
-      } ${isMobile ? "" : "cursor-pointer"}`}
+      }`}
       style={{ animationDelay: `${Math.min(index * 30, 300)}ms` }}
-      onClick={() => {
-        if (window.getSelection()?.toString().trim()) return
-        onClick()
-      }}
     >
       <div className="flex gap-3">
         <div className="shrink-0">
@@ -1326,11 +1144,13 @@ function TweetCard({
               <span className="flex items-center gap-1"><Eye className="h-3.5 w-3.5" />{formatCount(tweet.viewCount)}</span>
             )}
             <button
-              className="ml-auto p-1.5 rounded-full text-emerald-600 hover:bg-emerald-50 active:scale-95 touch-manipulation transition-transform"
+              className="ml-auto inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-emerald-600 hover:bg-emerald-50 active:scale-95 touch-manipulation transition-transform"
               onClick={(e) => { e.stopPropagation(); onAiClick() }}
-              aria-label="AI 解读"
+              aria-label="推文分析"
+              title="推文分析"
             >
               <Sparkles className="h-3.5 w-3.5" />
+              <span className="text-xs font-medium">推文分析</span>
             </button>
           </div>
         </div>
@@ -1339,116 +1159,3 @@ function TweetCard({
   )
 }
 
-// ─── LookupPopupCard 组件 ───────────────────────────────────────────────────────
-function LookupPopupCard({
-  text, anchorX, anchorY, result, loading, onClose, onAskAI,
-}: {
-  text: string; anchorX: number; anchorY: number
-  result: LookupResult | null; loading: boolean
-  onClose: () => void; onAskAI: () => void
-}) {
-  const POPUP_W = 340
-  const GAP = 10
-  const isMobilePopup = typeof window !== "undefined" && window.innerWidth < 768
-
-  const left = typeof window !== "undefined"
-    ? Math.max(8, Math.min(anchorX - POPUP_W / 2, window.innerWidth - POPUP_W - 8))
-    : anchorX
-
-  const style: React.CSSProperties = isMobilePopup
-    ? { position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 9999 }
-    : anchorY > 180
-      ? { position: "fixed", bottom: window.innerHeight - anchorY + GAP, left, width: POPUP_W, zIndex: 9999 }
-      : { position: "fixed", top: anchorY + GAP + 16, left, width: POPUP_W, zIndex: 9999 }
-
-  return (
-    <div
-      data-lookup-popup
-      style={style}
-      className={`bg-white shadow-xl border border-gray-200 overflow-hidden ${isMobilePopup ? "rounded-t-2xl max-h-[80vh] overflow-y-auto" : "rounded-2xl"}`}
-    >
-      {/* 标题行 */}
-      <div className="px-4 pt-3 pb-2 flex items-start justify-between gap-2 border-b border-gray-100">
-        <div className="min-w-0">
-          <div className="flex items-baseline gap-2 flex-wrap">
-            <span className="font-semibold text-gray-900 text-sm">{text}</span>
-            {result?.phonetic && (
-              <span className="text-xs text-violet-500 font-mono">{result.phonetic}</span>
-            )}
-            {result?.partOfSpeech && (
-              <span className="text-xs text-amber-600 italic">{result.partOfSpeech}</span>
-            )}
-          </div>
-        </div>
-        <button onClick={onClose} className="shrink-0 text-gray-400 hover:text-gray-600 mt-0.5">
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-
-      {/* 内容区 */}
-      <div className="px-4 py-3 space-y-3 min-h-[60px]">
-        {loading ? (
-          <div className="flex items-center gap-2 text-gray-400 text-sm">
-            <div className="w-4 h-4 border-2 border-gray-200 border-t-violet-400 rounded-full animate-spin shrink-0" />
-            查询中...
-          </div>
-        ) : result ? (
-          <>
-            {/* 中文释义 */}
-            {result.translation && (
-              <p className="text-sm font-bold text-gray-900 leading-snug">{result.translation}</p>
-            )}
-
-            {/* 详细释义（单词）或 词义拆解（短语）*/}
-            {(result.definition || result.breakdown) && (
-              <div className="border-t border-gray-100 pt-2">
-                <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1">
-                  {result.breakdown ? "词义拆解" : "释义"}
-                </p>
-                <p className="text-xs text-gray-700 leading-relaxed">
-                  {result.breakdown ?? result.definition}
-                </p>
-              </div>
-            )}
-
-            {/* 语法说明 */}
-            {result.grammar && (
-              <div className="border-t border-gray-100 pt-2">
-                <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1">语法说明</p>
-                <p className="text-xs text-gray-700 leading-relaxed">{result.grammar}</p>
-              </div>
-            )}
-
-            {/* 例句 */}
-            {result.example && (
-              <div className="border-t border-gray-100 pt-2">
-                <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1">例句</p>
-                <p className="text-xs text-gray-800 italic leading-relaxed">{result.example}</p>
-                {result.exampleZh && (
-                  <p className="text-xs text-gray-500 leading-relaxed mt-0.5">{result.exampleZh}</p>
-                )}
-              </div>
-            )}
-          </>
-        ) : null}
-      </div>
-
-      {/* 操作按钮 */}
-      <div className="px-4 pb-4 pt-1 flex gap-2 border-t border-gray-100">
-        <button
-          onClick={() => { try { navigator.clipboard.writeText(text) } catch {} onClose() }}
-          className="flex-1 text-xs px-3 py-1.5 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
-        >
-          复制
-        </button>
-        <button
-          onClick={onAskAI}
-          className="flex-1 text-xs px-3 py-1.5 rounded-full bg-violet-100 hover:bg-violet-200 text-violet-700 transition-colors flex items-center justify-center gap-1"
-        >
-          <Sparkles className="h-3 w-3" />
-          在AI中讨论
-        </button>
-      </div>
-    </div>
-  )
-}

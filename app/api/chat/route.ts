@@ -7,13 +7,6 @@ interface Message {
   content: string
 }
 
-interface SceneMeta {
-  aiRole: string
-  userRole: string
-  context: string
-  scenario: string
-}
-
 export async function POST(request: Request) {
   try {
     const { messages, sceneMeta } = await request.json()
