@@ -51,7 +51,7 @@ const pastelColors = [
 const voiceColor = { bg: "bg-emerald-100", border: "border-emerald-200", text: "text-emerald-700", hover: "hover:bg-emerald-200/60" }
 
 // ─── 翻译缓存（localStorage，上限 500 条）────────────────────────────────────────
-const TRANS_CACHE_KEY = "tweet-translations-v1"
+const TRANS_CACHE_KEY = "tweet-translations-v2"
 const TRANS_CACHE_LIMIT = 500
 
 function loadTransCache(): Record<string, string> {
