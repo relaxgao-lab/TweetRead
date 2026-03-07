@@ -117,18 +117,18 @@ function TweetPreview({
               unoptimized
             />
           ) : (
-            <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 text-xs font-bold shrink-0">
+            <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 text-sm font-bold shrink-0">
               {selectedTweet.author.name?.[0] ?? "?"}
             </div>
           )}
           <div className="flex-1 min-w-0">
             <div className="flex items-baseline gap-1 flex-wrap">
-              <span className="text-xs font-semibold text-gray-900">{selectedTweet.author.name}</span>
-              <span className="text-xs text-gray-400">@{selectedTweet.author.userName}</span>
-              <span className="text-xs text-gray-300">·</span>
-              <span className="text-xs text-gray-400">{formatRelativeTime(selectedTweet.createdAt)}</span>
+              <span className="text-sm font-semibold text-gray-900">{selectedTweet.author.name}</span>
+              <span className="text-sm text-gray-400">@{selectedTweet.author.userName}</span>
+              <span className="text-sm text-gray-300">·</span>
+              <span className="text-sm text-gray-400">{formatRelativeTime(selectedTweet.createdAt)}</span>
             </div>
-            <p className="mt-1 text-xs text-gray-700 leading-relaxed whitespace-pre-wrap break-words line-clamp-5">
+            <p className="mt-1 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-words line-clamp-5">
               {formatTweetText(selectedTweet.text)}
             </p>
             {selectedTweet.url && (
@@ -136,7 +136,7 @@ function TweetPreview({
                 href={selectedTweet.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-[10px] text-blue-400 hover:text-blue-600 mt-1"
+                className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-600 mt-1"
               >
                 <ExternalLink className="h-2.5 w-2.5" />
                 查看原文
@@ -158,14 +158,14 @@ function TweetPreview({
             className="w-6 h-6 rounded-full object-cover shrink-0"
           />
         ) : (
-          <div className="w-6 h-6 rounded-full bg-gray-200 shrink-0 flex items-center justify-center text-xs text-gray-500">
+          <div className="w-6 h-6 rounded-full bg-gray-200 shrink-0 flex items-center justify-center text-sm text-gray-500">
             {selectedTweet.author.name?.[0]}
           </div>
         )}
-        <span className="text-xs font-semibold text-gray-800 truncate">{selectedTweet.author.name}</span>
-        <span className="text-xs text-gray-400 truncate">@{selectedTweet.author.userName}</span>
+        <span className="text-sm font-semibold text-gray-800 truncate">{selectedTweet.author.name}</span>
+        <span className="text-sm text-gray-400 truncate">@{selectedTweet.author.userName}</span>
       </div>
-      <p className="text-xs text-gray-700 leading-relaxed">{formatTweetText(selectedTweet.text)}</p>
+      <p className="text-sm text-gray-700 leading-relaxed">{formatTweetText(selectedTweet.text)}</p>
     </div>
   )
 }
@@ -238,7 +238,7 @@ function MessageList({
           <p className="text-sm font-medium text-gray-400">
             {variant === "desktop" ? "点击左侧推文" : "点击上方推文"}
           </p>
-          <p className="text-xs text-gray-300">AI 将为你解读该推文</p>
+          <p className="text-sm text-gray-300">AI 将为你解读该推文</p>
         </div>
       )}
 
@@ -247,7 +247,7 @@ function MessageList({
       {selectedTweet && messages.length === 0 && (
         <div className={`text-center text-sm text-gray-500 space-y-2 ${variant === "desktop" ? "mt-8" : "mt-6"}`}>
           <p className="font-medium">有什么问题想了解吗？</p>
-          <p className="text-xs text-gray-400">
+          <p className="text-sm text-gray-400">
             {variant === "desktop" ? "点击下方快捷按钮，或直接输入问题" : "点击下方快捷按钮，或直接输入"}
           </p>
         </div>
@@ -256,16 +256,16 @@ function MessageList({
       {messages.map((msg, i) => (
         <div key={i} className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
           {msg.role === "user" && (
-            <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium bg-violet-500 text-white">
+            <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium bg-violet-500 text-white">
               我
             </div>
           )}
-          <div className={`flex-1 min-w-0 text-sm leading-relaxed ${msg.role === "user" ? "text-right" : "text-gray-800"}`}>
+          <div className={`flex-1 min-w-0 text-base leading-relaxed ${msg.role === "user" ? "text-right" : "text-gray-800"}`}>
             {msg.role === "user" ? (
               <div className="inline-block max-w-[85%] rounded-2xl bg-violet-50 border border-violet-100 overflow-hidden text-left">
                 {msg.quoted && (
                   <div className="border-b border-violet-100 bg-violet-50/70 px-4 py-2">
-                    <p className="text-xs leading-relaxed text-violet-900 line-clamp-2 whitespace-pre-wrap break-words">
+                    <p className="text-sm leading-relaxed text-violet-900 line-clamp-2 whitespace-pre-wrap break-words">
                       {msg.quoted.text}
                     </p>
                   </div>
@@ -288,7 +288,7 @@ function MessageList({
                   {msg.content ? renderAssistantContent(msg.content) : <LoadingDots />}
                 </div>
                 {i === messages.length - 1 && speechStatus === "speaking" && (
-                  <div className="flex items-center gap-2 text-xs text-emerald-600 pt-1">
+                  <div className="flex items-center gap-2 text-sm text-emerald-600 pt-1">
                     <span className="flex items-end gap-0.5 h-4">
                       {[1, 2, 3, 4].map((n) => (
                         <span
@@ -310,7 +310,7 @@ function MessageList({
       {isChatLoading && (
         <div className="flex gap-3">
           <div className="flex-1 min-w-0">
-            <div className="inline-block rounded-2xl bg-gray-50 border border-gray-100 px-4 py-2 text-sm text-gray-500">
+            <div className="inline-block rounded-2xl bg-gray-50 border border-gray-100 px-4 py-2 text-base text-gray-500">
               <LoadingDots />
             </div>
           </div>
@@ -348,7 +348,7 @@ function PresetPromptBar({
               size="sm"
               disabled={isChatLoading || speechStatus === "recording" || speechStatus === "processing"}
               onClick={() => onSendPreset(prompt.text)}
-              className={`text-xs h-9 px-4 rounded-xl border ${c.bg} ${c.border} ${c.text} ${c.hover} disabled:opacity-50 transition-all`}
+              className={`text-sm h-9 px-4 rounded-xl border ${c.bg} ${c.border} ${c.text} ${c.hover} disabled:opacity-50 transition-all`}
             >
               {prompt.label}
             </Button>
@@ -393,7 +393,7 @@ function ChatInput({
   return (
     <div className={`shrink-0 border-t border-gray-200 ${variant === "desktop" ? "p-4" : "p-3"} bg-gray-50/80`}>
       {speechError && (
-        <div className="mb-2 text-xs text-red-600 flex items-center justify-between gap-2">
+        <div className="mb-2 text-sm text-red-600 flex items-center justify-between gap-2">
           <span>{speechError}</span>
           <Button variant="ghost" size="sm" className="h-6 px-1 text-red-600" onClick={onDismissSpeechError}>
             关闭
@@ -404,8 +404,8 @@ function ChatInput({
         <div className="mb-2 rounded-lg border border-emerald-200 bg-emerald-50/80 px-3 py-2">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <p className="text-[11px] font-medium text-emerald-700">基于已选回复继续追问</p>
-              <p className="mt-1 text-xs leading-relaxed text-emerald-900 line-clamp-2 whitespace-pre-wrap break-words">
+              <p className="text-xs font-medium text-emerald-700">基于已选回复继续追问</p>
+              <p className="mt-1 text-sm leading-relaxed text-emerald-900 line-clamp-2 whitespace-pre-wrap break-words">
                 {quotedSelection.text}
               </p>
             </div>
@@ -433,7 +433,7 @@ function ChatInput({
               ? (variant === "desktop" ? "输入或语音...（Shift+Enter 换行）" : "输入或语音...")
               : (variant === "desktop" ? "请先点击左侧推文..." : "请先点击推文...")}
             disabled={isChatLoading || !selectedTweet || speechStatus === "processing"}
-            className="block w-full min-h-[44px] max-h-[120px] text-sm resize-none pt-2.5 px-3 border-0 focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent placeholder:text-gray-400"
+            className="block w-full min-h-[44px] max-h-[120px] text-base resize-none pt-2.5 px-3 border-0 focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent placeholder:text-gray-400"
             rows={1}
           />
           <div className="flex items-center justify-end gap-1.5 p-1.5 shrink-0">
@@ -496,15 +496,15 @@ function PanelBody(props: AiPanelProps) {
       <div className={`shrink-0 px-4 py-2 border-b border-gray-200 ${variant === "desktop" ? "bg-gray-50/80" : "bg-gray-50"} flex items-center justify-between gap-2`}>
         {variant === "desktop" ? (
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-gray-700">AI 解读助手</h3>
-            <p className="text-xs text-gray-500 mt-0.5">
+            <h3 className="text-base font-semibold text-gray-700">AI 解读助手</h3>
+            <p className="text-sm text-gray-500 mt-0.5">
               {selectedTweet ? `@${selectedTweet.author.userName}` : "点击左侧推文开始分析"}
             </p>
           </div>
         ) : (
           <div className="flex items-center gap-1.5 min-w-0">
             <Sparkles className="h-4 w-4 text-emerald-600 shrink-0" />
-            <h3 className="text-sm font-semibold text-gray-700">AI 解读助手</h3>
+            <h3 className="text-base font-semibold text-gray-700">AI 解读助手</h3>
           </div>
         )}
 

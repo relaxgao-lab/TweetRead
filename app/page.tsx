@@ -311,8 +311,9 @@ export default function HomePage() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const feedScrollRef = useRef<HTMLDivElement>(null)
   const transcriptCallback = useRef<((text: string) => void) | null>(null)
-
+  const keepMenuOpenForReadAloudRef = useRef(false)
   // 桌面端：isChatOpen 控制右侧面板；手机端：sheetState 控制底部抽屉
   const effectiveChatOpen = isMobile ? sheetState !== "hidden" : isChatOpen
   const sheetHeight = currentDragHeight ?? sheetHeights[sheetState]
@@ -369,6 +370,158 @@ export default function HomePage() {
   }, [])
 
   useEffect(() => { setMounted(true) }, [])
+
+  // 推文列表 wheel + touch 监听：document 捕获阶段兜底，兼容 DevTools 模拟器与 Mac 触摸板
+  useEffect(() => {
+    const el = feedScrollRef.current
+    if (!el) return
+
+    const scrollFeed = (deltaY: number) => {
+      const noOverflow = el.scrollHeight <= el.clientHeight
+      const { scrollTop, scrollHeight, clientHeight } = el
+      const atTop = scrollTop <= 0 && deltaY < 0
+      const atBottom = scrollTop + clientHeight >= scrollHeight && deltaY > 0
+      if (noOverflow || atTop || atBottom) return false
+      el.scrollTop += deltaY
+      return true
+    }
+
+    // 惯性滚动：记录速度，松手后平滑减速
+    const velocityBuffer: number[] = []
+    const pushVelocity = (v: number) => {
+      velocityBuffer.push(v)
+      if (velocityBuffer.length > 10) velocityBuffer.shift()
+    }
+    const getVelocity = () => {
+      if (velocityBuffer.length === 0) return 0
+      const recent = velocityBuffer.slice(-6)
+      const avg = recent.reduce((a, x) => a + x, 0) / recent.length
+      return avg * 1.3
+    }
+    let momentumRaf = 0
+    const runMomentum = () => {
+      let v = getVelocity()
+      velocityBuffer.length = 0
+      const friction = 0.92
+      const minSpeed = 0.5
+      const tick = () => {
+        if (Math.abs(v) < minSpeed) return
+        const { scrollTop, scrollHeight, clientHeight } = el
+        const maxScroll = scrollHeight - clientHeight
+        if (maxScroll <= 0) return
+        let next = scrollTop + v
+        if (next <= 0) {
+          el.scrollTop = 0
+          return
+        }
+        if (next >= maxScroll) {
+          el.scrollTop = maxScroll
+          return
+        }
+        el.scrollTop = next
+        v *= friction
+        momentumRaf = requestAnimationFrame(tick)
+      }
+      momentumRaf = requestAnimationFrame(tick)
+    }
+
+    const wheelHandler = (e: Event) => {
+      const we = e as WheelEvent
+      const target = e.target as Node
+      let inside = el.contains(target)
+      if (!inside && typeof we.clientX === "number") {
+        const atPoint = document.elementFromPoint(we.clientX, we.clientY)
+        inside = atPoint !== null && el.contains(atPoint)
+      }
+      if (!inside) return
+      const didScroll = scrollFeed(we.deltaY)
+      if (didScroll) e.preventDefault()
+    }
+
+    let touchStartY = 0
+    let touchWasInside = false
+    const touchHandler = (e: TouchEvent) => {
+      if (e.type === "touchend") {
+        if (touchWasInside) runMomentum()
+        return
+      }
+      if (e.touches.length !== 1) return
+      const target = e.target as Node
+      const touch = e.touches[0]
+      let inside = el.contains(target)
+      if (!inside && typeof touch.clientX === "number") {
+        const atPoint = document.elementFromPoint(touch.clientX, touch.clientY)
+        inside = atPoint !== null && el.contains(atPoint)
+      }
+      touchWasInside = inside
+      if (!inside) return
+      const touchY = touch.clientY
+      if (e.type === "touchstart") {
+        touchStartY = touchY
+        velocityBuffer.length = 0
+        cancelAnimationFrame(momentumRaf)
+        return
+      }
+      if (e.type === "touchmove") {
+        const deltaY = touchStartY - touchY
+        touchStartY = touchY
+        const didScroll = scrollFeed(deltaY)
+        if (didScroll) {
+          pushVelocity(deltaY)
+          e.preventDefault()
+        }
+      }
+    }
+
+    let mouseStartY = 0
+    let isMouseDownOnFeed = false
+    const mouseDownHandler = (e: MouseEvent) => {
+      const target = e.target as Node
+      let inside = el.contains(target)
+      if (!inside && typeof e.clientX === "number") {
+        const atPoint = document.elementFromPoint(e.clientX, e.clientY)
+        inside = atPoint !== null && el.contains(atPoint)
+      }
+      if (!inside) return
+      isMouseDownOnFeed = true
+      mouseStartY = e.clientY
+      velocityBuffer.length = 0
+      cancelAnimationFrame(momentumRaf)
+    }
+    const mouseMoveHandler = (e: MouseEvent) => {
+      if (!isMouseDownOnFeed || e.buttons !== 1) return
+      const deltaY = mouseStartY - e.clientY
+      mouseStartY = e.clientY
+      const didScroll = scrollFeed(deltaY)
+      if (didScroll) pushVelocity(deltaY)
+    }
+    const mouseUpHandler = () => {
+      if (isMouseDownOnFeed) runMomentum()
+      isMouseDownOnFeed = false
+    }
+
+    const opts = { passive: false } as AddEventListenerOptions
+    const capture = true
+    document.addEventListener("wheel", wheelHandler, { ...opts, capture })
+    document.addEventListener("touchstart", touchHandler, { passive: true })
+    document.addEventListener("touchmove", touchHandler, opts)
+    document.addEventListener("touchend", touchHandler, { passive: true })
+    document.addEventListener("mousedown", mouseDownHandler, { capture })
+    document.addEventListener("mousemove", mouseMoveHandler, { capture })
+    document.addEventListener("mouseup", mouseUpHandler, { capture })
+    document.addEventListener("mouseleave", mouseUpHandler, { capture })
+    return () => {
+      cancelAnimationFrame(momentumRaf)
+      document.removeEventListener("wheel", wheelHandler, { ...opts, capture } as EventListenerOptions)
+      document.removeEventListener("touchstart", touchHandler)
+      document.removeEventListener("touchmove", touchHandler, opts)
+      document.removeEventListener("touchend", touchHandler, { passive: true } as EventListenerOptions)
+      document.removeEventListener("mousedown", mouseDownHandler, { capture } as EventListenerOptions)
+      document.removeEventListener("mousemove", mouseMoveHandler, { capture } as EventListenerOptions)
+      document.removeEventListener("mouseup", mouseUpHandler, { capture } as EventListenerOptions)
+      document.removeEventListener("mouseleave", mouseUpHandler, { capture } as EventListenerOptions)
+    }
+  }, [])
 
   // 恢复打开后再两帧开启过渡（避免初次展开有动画）
   useEffect(() => {
@@ -790,6 +943,7 @@ export default function HomePage() {
   }
 
   const closeSelectionMenu = useCallback((clearSelection = false) => {
+    keepMenuOpenForReadAloudRef.current = false
     setSelectionMenu(null)
     setPendingSelectionActionId(null)
     if (clearSelection) window.getSelection()?.removeAllRanges()
@@ -814,6 +968,7 @@ export default function HomePage() {
     if (actionId === "readAloud") {
       setSpeechError(null)
       setPendingSelectionActionId("readAloud")
+      keepMenuOpenForReadAloudRef.current = true
       try {
         await whisperSpeechService.speak(text)
       } finally {
@@ -885,6 +1040,7 @@ export default function HomePage() {
       const sel = window.getSelection()
       const text = sel?.toString().trim()
       if (!text) {
+        if (keepMenuOpenForReadAloudRef.current) return
         closeSelectionMenu()
         return
       }
@@ -921,7 +1077,7 @@ export default function HomePage() {
 
   return (
     <div
-      className="flex flex-col overflow-hidden relative mobile-bg-scroll bg-fixed w-full h-[var(--app-height)]"
+      className="flex flex-col overflow-hidden relative mobile-bg-scroll bg-fixed w-full max-w-[100vw] min-w-0 h-[var(--app-height)]"
       style={{
         background: "linear-gradient(135deg, #dce8f0 0%, #ede8e0 40%, #e4ece6 100%)",
       }}
@@ -929,23 +1085,23 @@ export default function HomePage() {
       {/* 背景遮罩 */}
       <div className="absolute inset-0 bg-white/60 backdrop-blur-[1px] pointer-events-none z-0" />
 
-      {/* ── Header：始终流式布局，safe-area-top 保证刘海屏正常 ── */}
-      <header className="relative z-10 shrink-0 bg-white/80 border-b border-gray-200 shadow-sm backdrop-blur-sm pt-[env(safe-area-inset-top)]">
+      {/* ── Header：始终流式布局，safe-area-top 保证刘海屏正常，sticky 确保手机端可见 ── */}
+      <header className="sticky top-0 z-20 shrink-0 bg-white/80 border-b border-gray-200 shadow-sm backdrop-blur-sm pt-[env(safe-area-inset-top)]">
         <div className="px-4 py-2.5 flex items-center gap-3">
-          <h1 className="text-lg font-bold text-gray-900 tracking-tight shrink-0">TweetRead</h1>
+          <h1 className="text-xl md:text-lg font-bold text-gray-900 tracking-tight shrink-0">TweetRead</h1>
           {/* Tab 栏 */}
           <div className="flex-1 flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {ACCOUNTS.map((account) => (
               <button
                 key={account.userName}
                 onClick={() => { setActiveTab(account.userName); setError(null) }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-base md:text-sm font-medium whitespace-nowrap transition-all ${
                   activeTab === account.userName
                     ? "bg-gray-900 text-white"
                     : "bg-gray-100/80 text-gray-600 hover:bg-gray-200/80"
                 }`}
               >
-                <span className="text-xs opacity-70">@</span>
+                <span className="text-sm md:text-xs opacity-70">@</span>
                 {account.userName}
               </button>
             ))}
@@ -969,10 +1125,10 @@ export default function HomePage() {
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden min-w-0">
             {activeAccount.description && (
               <div className="shrink-0 px-4 py-1.5 border-b border-gray-200/60 bg-white/50">
-                <p className="text-xs text-black text-center truncate">{activeAccount.description}</p>
+                <p className="text-sm md:text-xs text-black text-center truncate">{activeAccount.description}</p>
               </div>
             )}
-            <div className="flex-1 overflow-y-auto hide-vertical-scrollbar min-h-0">
+            <div ref={feedScrollRef} className="flex-1 overflow-y-auto hide-vertical-scrollbar min-h-0">
               <div className="max-w-2xl mx-auto" style={{ paddingBottom: isMobile ? "env(safe-area-inset-bottom, 16px)" : undefined }}>
                 {error && (
                   <div className="mx-4 mt-4 p-3 bg-red-50/90 border border-red-200 rounded-lg text-sm text-red-700 flex justify-between items-center">
@@ -1243,12 +1399,12 @@ function TweetCard({
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-1.5 flex-wrap">
             <span className="font-semibold text-sm text-gray-900 truncate">{tweet.author.name}</span>
-            <span className="text-xs text-gray-400 shrink-0">@{tweet.author.userName}</span>
-            <span className="text-xs text-gray-300 shrink-0">·</span>
-            <span className="text-xs text-gray-400 shrink-0">{formatRelativeTime(tweet.createdAt)}</span>
+            <span className="text-sm md:text-xs text-gray-400 shrink-0">@{tweet.author.userName}</span>
+            <span className="text-sm md:text-xs text-gray-300 shrink-0">·</span>
+            <span className="text-sm md:text-xs text-gray-400 shrink-0">{formatRelativeTime(tweet.createdAt)}</span>
           </div>
           <p
-            className="mt-1.5 text-sm text-gray-800 leading-relaxed whitespace-pre-wrap break-words line-clamp-6 select-text"
+            className="mt-1.5 text-base md:text-sm text-gray-800 leading-relaxed whitespace-pre-wrap break-words line-clamp-6 select-text"
             onMouseUp={handleMouseUp}
             onTouchEnd={handleTouchEnd}
           >
@@ -1256,7 +1412,7 @@ function TweetCard({
           </p>
           {tweet.textZh && (
             <p
-              className="mt-1 text-sm text-gray-500 leading-relaxed whitespace-pre-wrap break-words line-clamp-4 select-text"
+              className="mt-1 text-base md:text-sm text-gray-500 leading-relaxed whitespace-pre-wrap break-words line-clamp-4 select-text"
               onMouseUp={handleMouseUp}
               onTouchEnd={handleTouchEnd}
             >
@@ -1268,7 +1424,7 @@ function TweetCard({
               <img src={tweet.media[0].url} alt="media" className="w-full max-h-48 object-cover" loading="lazy" />
             </div>
           )}
-          <div className="mt-2.5 flex items-center gap-4 text-xs text-gray-400">
+          <div className="mt-2.5 flex items-center gap-4 text-sm md:text-xs text-gray-400">
             <span className="flex items-center gap-1"><Heart className="h-3.5 w-3.5" />{formatCount(tweet.likeCount)}</span>
             <span className="flex items-center gap-1"><Repeat2 className="h-3.5 w-3.5" />{formatCount(tweet.retweetCount)}</span>
             <span className="flex items-center gap-1"><MessageCircle className="h-3.5 w-3.5" />{formatCount(tweet.replyCount)}</span>
@@ -1282,7 +1438,7 @@ function TweetCard({
               title="推文分析"
             >
               <Sparkles className="h-3.5 w-3.5" />
-              <span className="text-xs font-medium">推文分析</span>
+              <span className="text-sm md:text-xs font-medium">推文分析</span>
             </button>
           </div>
         </div>

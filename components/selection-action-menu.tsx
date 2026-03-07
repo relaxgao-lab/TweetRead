@@ -47,7 +47,7 @@ export function SelectionActionMenu({
                 key={action.id}
                 type="button"
                 disabled={isLoading}
-                className="px-3 py-1.5 rounded-full text-xs font-semibold text-gray-700 bg-white hover:bg-gray-100 active:scale-[0.98] touch-manipulation transition whitespace-nowrap disabled:cursor-wait disabled:opacity-80 disabled:hover:bg-white disabled:active:scale-100"
+                className="px-3 py-1.5 rounded-full text-sm md:text-xs font-semibold text-gray-700 bg-white hover:bg-gray-100 active:scale-[0.98] touch-manipulation transition whitespace-nowrap disabled:cursor-wait disabled:opacity-80 disabled:hover:bg-white disabled:active:scale-100"
                 onClick={() => onAction(action.id)}
               >
                 {isLoading ? "加载中..." : action.label}
