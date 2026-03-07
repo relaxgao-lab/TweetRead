@@ -190,9 +190,13 @@ export class WhisperSpeechService {
       
       // 移动端优化：blob URL 不需要 crossOrigin，避免部分机型异常
       audio.preload = 'auto'
+      audio.load()
 
-      // 等待音频加载完成（10 秒超时）
-      // 原因：部分手机浏览器对 blob URL 不触发 canplay/canplaythrough，只触发 loadeddata 或 readyState 变化
+      const loadTimeoutMs = this.isMobile() ? 20000 : 10000
+      const minReadyState = this.isMobile() ? 1 : 2
+
+      // 等待音频加载完成（移动端 20 秒 / 桌面 10 秒超时）
+      // 原因：部分手机浏览器对 blob URL 不触发 canplay/canplaythrough，只触发 loadeddata 或 readyState 变化；移动端放宽为 readyState >= 1
       await new Promise<void>((resolve, reject) => {
         let settled = false
         const settle = () => {
@@ -220,13 +224,12 @@ export class WhisperSpeechService {
             })
             reject(new Error('音频加载超时，请检查网络连接或稍后重试'))
           }
-        }, 10000)
+        }, loadTimeoutMs)
 
         // 轮询：部分移动端不触发 canplay，仅更新 readyState，用轮询兜底
         const pollId = setInterval(() => {
           if (settled) return
-          // readyState >= 2 (HAVE_CURRENT_DATA) 即可尝试播放
-          if (audio!.readyState >= 2) {
+          if (audio!.readyState >= minReadyState) {
             console.log('Audio ready (poll), readyState:', audio!.readyState)
             settle()
           }
@@ -242,7 +245,7 @@ export class WhisperSpeechService {
         }
         const onLoadedData = () => {
           console.log('Audio loadeddata, readyState:', audio!.readyState)
-          if (audio!.readyState >= 2) settle()
+          if (audio!.readyState >= minReadyState) settle()
         }
 
         audio!.addEventListener('canplay', onCanPlay)
@@ -278,7 +281,7 @@ export class WhisperSpeechService {
           }
         }
 
-        if (audio!.readyState >= 2) {
+        if (audio!.readyState >= minReadyState) {
           console.log('Audio already ready, readyState:', audio!.readyState)
           settle()
         }
@@ -351,6 +354,15 @@ export class WhisperSpeechService {
         audio.src = ''
       }
       this.currentOpenAIAudio = null
+      const msg = getErrorMessage(error, '')
+      if (this.isMobile() && msg.includes('音频加载超时')) {
+        try {
+          await this._speakSystem(text)
+        } catch {
+          throw error
+        }
+        return
+      }
       throw error
     }
   }
@@ -376,6 +388,11 @@ export class WhisperSpeechService {
   private handleError(msg: string): void {
     this.config.onError?.(msg)
     this.setStatus('idle')
+  }
+
+  private isMobile(): boolean {
+    if (typeof navigator === 'undefined') return false
+    return /iPhone|iPad|iPod|Android|webOS|Mobile/i.test(navigator.userAgent)
   }
 
   private cleanupCurrentAudio(): void {

@@ -1,5 +1,9 @@
 "use client"
 
+import { useEffect, useState } from "react"
+import { createPortal } from "react-dom"
+import type { ReactNode } from "react"
+
 type SelectionActionMenuItem = {
   id: string
   label: string
@@ -20,13 +24,15 @@ export function SelectionActionMenu({
   loadingActionId,
   onAction,
 }: SelectionActionMenuProps) {
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
+
   const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 375
-  const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 800
   const estimatedWidth = Math.max(220, primaryActions.length * 88)
   const left = Math.max(8, Math.min(anchorX - estimatedWidth / 2, viewportWidth - estimatedWidth - 8))
-  const top = Math.min(anchorY + 8, viewportHeight - 56)
+  const top = anchorY + 10
 
-  return (
+  const menu: ReactNode = (
     <div
       data-selection-action-menu
       className="fixed z-[200] pointer-events-auto"
@@ -52,4 +58,7 @@ export function SelectionActionMenu({
       </div>
     </div>
   )
+
+  if (!mounted || typeof document === "undefined") return menu
+  return <>{createPortal(menu, document.body)}</>
 }

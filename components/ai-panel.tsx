@@ -2,7 +2,7 @@
 
 import type React from "react"
 import Image from "next/image"
-import { ChevronDown, ExternalLink, Mic, Send, Sparkles, StopCircle, Volume2, VolumeX, X } from "lucide-react"
+import { ChevronDown, ExternalLink, Mic, Send, Sparkles, StopCircle, Volume2, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -38,8 +38,6 @@ type AiPanelProps = {
   isChatLoading: boolean
   speechStatus: SpeechStatus
   speechError: string | null
-  isSpeechEnabled: boolean
-  onToggleSpeech: () => void
   onClose: () => void
   onSendPreset: (text: string) => void
   onInputChange: (value: string) => void
@@ -93,34 +91,6 @@ function LoadingDots() {
       <span className="animate-dot-flash-2">·</span>
       <span className="animate-dot-flash-3">·</span>
     </span>
-  )
-}
-
-function VoiceToggleButton({
-  isSpeechEnabled,
-  onToggleSpeech,
-  variant,
-}: {
-  isSpeechEnabled: boolean
-  onToggleSpeech: () => void
-  variant: "desktop" | "mobile"
-}) {
-  return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      onClick={onToggleSpeech}
-      className={`${variant === "desktop" ? "shrink-0 " : ""}h-8 px-2 border ${voiceColor.bg} ${voiceColor.border} ${voiceColor.text} ${voiceColor.hover}`}
-      title={variant === "desktop"
-        ? (isSpeechEnabled ? "关闭语音朗读" : "开启语音朗读")
-        : (isSpeechEnabled ? "关闭语音" : "开启语音")}
-    >
-      {isSpeechEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-      {variant === "desktop" && (
-        <span className="ml-1 text-xs">{isSpeechEnabled ? "语音开" : "语音关"}</span>
-      )}
-    </Button>
   )
 }
 
@@ -222,10 +192,11 @@ function MessageList({
   onAssistantTextSelect: (selection: AssistantSelectionPayload) => void
 }) {
   const readAssistantSelection = (
-    container: HTMLDivElement,
+    container: HTMLDivElement | null,
     messageIndex: number,
     fullMessageContent: string,
   ) => {
+    if (!container) return
     const sel = window.getSelection()
     if (!sel || sel.rangeCount === 0) return
 
@@ -237,10 +208,19 @@ function MessageList({
 
     try {
       const rect = range.getBoundingClientRect()
+      const rects = range.getClientRects()
+      let anchorY = rect.bottom
+      if (rects.length > 0) {
+        let maxBottom = rects[0].bottom
+        for (let i = 1; i < rects.length; i++) {
+          if (rects[i].bottom > maxBottom) maxBottom = rects[i].bottom
+        }
+        anchorY = maxBottom
+      }
       onAssistantTextSelect({
         text,
         anchorX: rect.left + rect.width / 2,
-        anchorY: rect.bottom,
+        anchorY,
         messageIndex,
         fullMessageContent,
       })
@@ -301,7 +281,8 @@ function MessageList({
                   onMouseUp={(e) => readAssistantSelection(e.currentTarget, i, msg.content)}
                   onTouchEnd={(e) => {
                     if (variant !== "mobile") return
-                    requestAnimationFrame(() => readAssistantSelection(e.currentTarget, i, msg.content))
+                    const container = e.currentTarget
+                    requestAnimationFrame(() => readAssistantSelection(container, i, msg.content))
                   }}
                 >
                   {msg.content ? renderAssistantContent(msg.content) : <LoadingDots />}
@@ -494,8 +475,6 @@ function PanelBody(props: AiPanelProps) {
     isChatLoading,
     speechStatus,
     speechError,
-    isSpeechEnabled,
-    onToggleSpeech,
     onClose,
     onSendPreset,
     onInputChange,
@@ -530,11 +509,6 @@ function PanelBody(props: AiPanelProps) {
         )}
 
         <div className={`flex items-center ${variant === "desktop" ? "gap-2" : "gap-1.5"} shrink-0`}>
-          <VoiceToggleButton
-            isSpeechEnabled={isSpeechEnabled}
-            onToggleSpeech={onToggleSpeech}
-            variant={variant}
-          />
           {variant === "desktop" ? (
             <Button
               type="button"

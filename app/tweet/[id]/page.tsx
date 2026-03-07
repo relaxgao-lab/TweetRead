@@ -6,7 +6,7 @@ import { useParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import {
-  ArrowLeft, Send, Mic, StopCircle, Volume2, VolumeX,
+  ArrowLeft, Send, Mic, StopCircle, Volume2,
   Sparkles, ExternalLink, Heart, Repeat2, MessageCircle, Eye,
   ChevronDown,
 } from "lucide-react"
@@ -42,11 +42,6 @@ const pastelColors = [
   { bg: "bg-pink-100",   border: "border-pink-200",   text: "text-pink-700",   hover: "hover:bg-pink-200/70"   },
   { bg: "bg-amber-100",  border: "border-amber-200",  text: "text-amber-800",  hover: "hover:bg-amber-200/70"  },
 ]
-
-const voiceToggleColor = {
-  bg: "bg-emerald-100", border: "border-emerald-200",
-  text: "text-emerald-700", hover: "hover:bg-emerald-200/70",
-}
 
 // ─── Utils ────────────────────────────────────────────────────────────────────
 function buildSceneMeta(tweet: Tweet) {
@@ -131,8 +126,8 @@ export default function TweetPage() {
   const [isChatLoading, setIsChatLoading] = useState(false)
   const [speechStatus, setSpeechStatus] = useState<SpeechStatus>("idle")
   const [speechError, setSpeechError] = useState<string | null>(null)
-  const [isSpeechEnabled, setIsSpeechEnabled] = useState(false)
-  const isSpeechEnabledRef = useRef(false)
+  const [isSpeechEnabled, setIsSpeechEnabled] = useState(true)
+  const isSpeechEnabledRef = useRef(true)
   isSpeechEnabledRef.current = isSpeechEnabled
 
   // Desktop: resizable AI panel
@@ -821,20 +816,6 @@ export default function TweetPage() {
                   <div className="flex items-center gap-2">
                     <Button
                       type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        if (isSpeechEnabled) { whisperSpeechService.stopSpeaking(); setSpeechError(null) }
-                        setIsSpeechEnabled(!isSpeechEnabled)
-                      }}
-                      className={`shrink-0 h-8 px-2 border ${voiceToggleColor.bg} ${voiceToggleColor.border} ${voiceToggleColor.text} ${voiceToggleColor.hover}`}
-                      title={isSpeechEnabled ? "关闭语音朗读" : "开启语音朗读"}
-                    >
-                      {isSpeechEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-                      <span className="ml-1 text-xs">{isSpeechEnabled ? "语音开" : "语音关"}</span>
-                    </Button>
-                    <Button
-                      type="button"
                       variant="ghost"
                       size="icon"
                       onClick={() => setIsChatOpen(false)}
@@ -893,19 +874,6 @@ export default function TweetPage() {
                     <h3 className="text-sm font-semibold text-gray-700">AI 解读助手</h3>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        if (isSpeechEnabled) { whisperSpeechService.stopSpeaking(); setSpeechError(null) }
-                        setIsSpeechEnabled(!isSpeechEnabled)
-                      }}
-                      className={`h-8 px-2 border ${voiceToggleColor.bg} ${voiceToggleColor.border} ${voiceToggleColor.text} ${voiceToggleColor.hover}`}
-                      title={isSpeechEnabled ? "关闭语音" : "开启语音"}
-                    >
-                      {isSpeechEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-                    </Button>
                     {sheetState === "full" && (
                       <Button
                         type="button"

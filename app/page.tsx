@@ -17,6 +17,13 @@ const MIN_CHAT_WIDTH = 280
 const MAX_CHAT_WIDTH_PERCENT = 70
 const DEFAULT_CHAT_WIDTH = 420
 
+const FAB_SIZE = 48
+const FAB_MARGIN = 8
+const FAB_DEFAULT_RIGHT = 16
+const FAB_DEFAULT_BOTTOM = 24
+const FAB_CLICK_THRESHOLD = 8
+const FAB_STORAGE_KEY = "tweet-home-fab-position"
+
 // ─── 类型 ─────────────────────────────────────────────────────────────────────
 type SheetState = "hidden" | "half" | "full"
 type TweetCache = Record<string, { tweets: Tweet[]; hasMore: boolean; nextCursor?: string; loadedAt: number }>
@@ -265,9 +272,7 @@ export default function HomePage() {
   const [isChatLoading, setIsChatLoading] = useState(false)
   const [speechStatus, setSpeechStatus] = useState<SpeechStatus>("idle")
   const [speechError, setSpeechError] = useState<string | null>(null)
-  const [isSpeechEnabled, setIsSpeechEnabled] = useState(false)
-  const isSpeechEnabledRef = useRef(false)
-  isSpeechEnabledRef.current = isSpeechEnabled
+  const [isSpeechEnabled, setIsSpeechEnabled] = useState(true)
 
   // ── AI 面板：宽度 + 开关 ──
   const [chatWidth, setChatWidth] = useState(DEFAULT_CHAT_WIDTH)
@@ -289,6 +294,16 @@ export default function HomePage() {
   const [sheetHeights, setSheetHeights] = useState({ hidden: 0, half: 480, full: 700 })
   const sheetTouchStartY = useRef(0)
   const sheetTouchStartH = useRef(0)
+
+  // 手机端悬浮 AI 按钮位置（可拖动，不超出屏幕）
+  const [fabRight, setFabRight] = useState(FAB_DEFAULT_RIGHT)
+  const [fabBottom, setFabBottom] = useState(FAB_DEFAULT_BOTTOM)
+  const fabDragStartRef = useRef<{ right: number; bottom: number; clientX: number; clientY: number; touchId?: number } | null>(null)
+  const fabHasDraggedRef = useRef(false)
+  const fabRightRef = useRef(FAB_DEFAULT_RIGHT)
+  const fabBottomRef = useRef(FAB_DEFAULT_BOTTOM)
+  fabRightRef.current = fabRight
+  fabBottomRef.current = fabBottom
 
   // 选区动作菜单：保存选中文本、锚点和菜单展开状态
   const [selectionMenu, setSelectionMenu] = useState<SelectionMenuState | null>(null)
@@ -440,6 +455,124 @@ export default function HomePage() {
     const nearest = (Object.entries(distances).sort((a, b) => a[1] - b[1])[0][0]) as SheetState
     setSheetState(nearest)
   }, [currentDragHeight, sheetHeights, sheetState])
+
+  // ── 手机端悬浮按钮：可拖动、不超出屏幕 ──
+  const clampFabPosition = useCallback((right: number, bottom: number) => {
+    if (typeof window === "undefined") return { right: FAB_DEFAULT_RIGHT, bottom: FAB_DEFAULT_BOTTOM }
+    const maxRight = window.innerWidth - FAB_SIZE - FAB_MARGIN
+    const maxBottom = window.innerHeight - FAB_SIZE - FAB_MARGIN
+    return {
+      right: Math.max(FAB_MARGIN, Math.min(right, maxRight)),
+      bottom: Math.max(FAB_MARGIN, Math.min(bottom, maxBottom)),
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!mounted || typeof window === "undefined") return
+    try {
+      const raw = localStorage.getItem(FAB_STORAGE_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw) as { right?: number; bottom?: number }
+        const r = typeof parsed?.right === "number" ? parsed.right : FAB_DEFAULT_RIGHT
+        const b = typeof parsed?.bottom === "number" ? parsed.bottom : FAB_DEFAULT_BOTTOM
+        const { right, bottom } = clampFabPosition(r, b)
+        setFabRight(right)
+        setFabBottom(bottom)
+      }
+    } catch {}
+  }, [mounted, clampFabPosition])
+
+  useEffect(() => {
+    if (!mounted || typeof window === "undefined") return
+    const onResize = () => {
+      const { right, bottom } = clampFabPosition(fabRightRef.current, fabBottomRef.current)
+      setFabRight(right)
+      setFabBottom(bottom)
+    }
+    window.addEventListener("resize", onResize)
+    return () => window.removeEventListener("resize", onResize)
+  }, [mounted, clampFabPosition])
+
+  useEffect(() => {
+    if (!mounted || typeof window === "undefined") return
+    localStorage.setItem(FAB_STORAGE_KEY, JSON.stringify({ right: fabRight, bottom: fabBottom }))
+  }, [mounted, fabRight, fabBottom])
+
+  const handleFabPointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    fabDragStartRef.current = { right: fabRight, bottom: fabBottom, clientX: e.clientX, clientY: e.clientY }
+    fabHasDraggedRef.current = false
+    const onMove = (e: PointerEvent) => {
+      e.preventDefault()
+      const start = fabDragStartRef.current
+      if (!start) return
+      const deltaX = e.clientX - start.clientX
+      const deltaY = e.clientY - start.clientY
+      if (!fabHasDraggedRef.current && (Math.abs(deltaX) > FAB_CLICK_THRESHOLD || Math.abs(deltaY) > FAB_CLICK_THRESHOLD)) {
+        fabHasDraggedRef.current = true
+      }
+      if (fabHasDraggedRef.current && typeof window !== "undefined") {
+        const newRight = start.right - deltaX
+        const newBottom = start.bottom - deltaY
+        const { right, bottom } = clampFabPosition(newRight, newBottom)
+        setFabRight(right)
+        setFabBottom(bottom)
+      }
+    }
+    const onUp = () => {
+      if (!fabHasDraggedRef.current) setSheetState("half")
+      fabDragStartRef.current = null
+      document.removeEventListener("pointermove", onMove, true)
+      document.removeEventListener("pointerup", onUp, true)
+      document.removeEventListener("pointercancel", onUp, true)
+    }
+    document.addEventListener("pointermove", onMove, { capture: true, passive: false })
+    document.addEventListener("pointerup", onUp, true)
+    document.addEventListener("pointercancel", onUp, true)
+  }, [fabRight, fabBottom, clampFabPosition])
+
+  const handleFabTouchStart = useCallback((e: React.TouchEvent) => {
+    const touch = e.touches[0]
+    if (!touch) return
+    fabDragStartRef.current = {
+      right: fabRight,
+      bottom: fabBottom,
+      clientX: touch.clientX,
+      clientY: touch.clientY,
+      touchId: touch.identifier,
+    }
+    fabHasDraggedRef.current = false
+    const onTouchMove = (ev: TouchEvent) => {
+      const start = fabDragStartRef.current
+      if (!start || start.touchId === undefined) return
+      const t = Array.from(ev.touches).find((x) => x.identifier === start.touchId)
+      if (!t) return
+      ev.preventDefault()
+      const deltaX = t.clientX - start.clientX
+      const deltaY = t.clientY - start.clientY
+      if (!fabHasDraggedRef.current && (Math.abs(deltaX) > FAB_CLICK_THRESHOLD || Math.abs(deltaY) > FAB_CLICK_THRESHOLD)) {
+        fabHasDraggedRef.current = true
+      }
+      if (fabHasDraggedRef.current && typeof window !== "undefined") {
+        const newRight = start.right - deltaX
+        const newBottom = start.bottom - deltaY
+        const { right, bottom } = clampFabPosition(newRight, newBottom)
+        setFabRight(right)
+        setFabBottom(bottom)
+      }
+    }
+    const onTouchEnd = () => {
+      if (!fabHasDraggedRef.current) setSheetState("half")
+      fabDragStartRef.current = null
+      document.removeEventListener("touchmove", onTouchMove, { capture: true })
+      document.removeEventListener("touchend", onTouchEnd, { capture: true })
+      document.removeEventListener("touchcancel", onTouchEnd, { capture: true })
+    }
+    document.addEventListener("touchmove", onTouchMove, { capture: true, passive: false })
+    document.addEventListener("touchend", onTouchEnd, { capture: true })
+    document.addEventListener("touchcancel", onTouchEnd, { capture: true })
+  }, [fabRight, fabBottom, clampFabPosition])
 
   // ── 推文翻译（SSE 流式 + localStorage 缓存）──
   const translateTweets = useCallback(async (userName: string, tweets: Tweet[]) => {
@@ -632,11 +765,6 @@ export default function HomePage() {
           } catch {}
         }
       }
-
-      if (isSpeechEnabledRef.current && accumulated) {
-        const speakText = extractSpeakContent(accumulated)
-        if (speakText) try { await whisperSpeechService.speak(speakText) } catch { setSpeechError("语音播放失败") }
-      }
     } catch { setSpeechError("对话请求失败，请稍后重试") }
     finally { setIsChatLoading(false) }
   }, [isChatLoading, selectedTweet, messages, quotedSelection, isMobile, sheetState])
@@ -658,11 +786,7 @@ export default function HomePage() {
   }
 
   const handleSpeechToggle = () => {
-    if (isSpeechEnabled) {
-      whisperSpeechService.stopSpeaking()
-      setSpeechError(null)
-    }
-    setIsSpeechEnabled(!isSpeechEnabled)
+    // 语音默认常开，保留空实现以防有地方仍引用
   }
 
   const closeSelectionMenu = useCallback((clearSelection = false) => {
@@ -797,55 +921,52 @@ export default function HomePage() {
 
   return (
     <div
-      className="h-screen flex flex-col overflow-hidden relative mobile-bg-scroll bg-fixed"
-      style={{ background: "linear-gradient(135deg, #dce8f0 0%, #ede8e0 40%, #e4ece6 100%)" }}
+      className="flex flex-col overflow-hidden relative mobile-bg-scroll bg-fixed w-full h-[var(--app-height)]"
+      style={{
+        background: "linear-gradient(135deg, #dce8f0 0%, #ede8e0 40%, #e4ece6 100%)",
+      }}
     >
       {/* 背景遮罩 */}
       <div className="absolute inset-0 bg-white/60 backdrop-blur-[1px] pointer-events-none z-0" />
 
-      {/* 内容层 */}
-      <div className="relative z-10 flex flex-col h-full min-h-0 pt-[env(safe-area-inset-top)]">
-
-        {/* ── Header ── */}
-        <header className="shrink-0 bg-white/80 border-b border-gray-200 shadow-sm backdrop-blur-sm">
-          <div className="px-4 py-2.5 flex items-center gap-3">
-            <h1 className="text-lg font-bold text-gray-900 tracking-tight shrink-0">TweetRead</h1>
-            {/* Tab 栏 */}
-            <div className="flex-1 flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {ACCOUNTS.map((account) => (
-                <button
-                  key={account.userName}
-                  onClick={() => { setActiveTab(account.userName); setError(null) }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
-                    activeTab === account.userName
-                      ? "bg-gray-900 text-white"
-                      : "bg-gray-100/80 text-gray-600 hover:bg-gray-200/80"
-                  }`}
-                >
-                  <span className="text-xs opacity-70">@</span>
-                  {account.userName}
-                </button>
-              ))}
-            </div>
-            <Button
-              variant="ghost" size="icon"
-              onClick={() => loadTweets(activeTab)}
-              disabled={loading}
-              className="text-gray-500 hover:text-gray-900 shrink-0"
-              title="刷新"
-            >
-              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-            </Button>
+      {/* ── Header：始终流式布局，safe-area-top 保证刘海屏正常 ── */}
+      <header className="relative z-10 shrink-0 bg-white/80 border-b border-gray-200 shadow-sm backdrop-blur-sm pt-[env(safe-area-inset-top)]">
+        <div className="px-4 py-2.5 flex items-center gap-3">
+          <h1 className="text-lg font-bold text-gray-900 tracking-tight shrink-0">TweetRead</h1>
+          {/* Tab 栏 */}
+          <div className="flex-1 flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {ACCOUNTS.map((account) => (
+              <button
+                key={account.userName}
+                onClick={() => { setActiveTab(account.userName); setError(null) }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                  activeTab === account.userName
+                    ? "bg-gray-900 text-white"
+                    : "bg-gray-100/80 text-gray-600 hover:bg-gray-200/80"
+                }`}
+              >
+                <span className="text-xs opacity-70">@</span>
+                {account.userName}
+              </button>
+            ))}
           </div>
-        </header>
+          <Button
+            variant="ghost" size="icon"
+            onClick={() => loadTweets(activeTab)}
+            disabled={loading}
+            className="text-gray-500 hover:text-gray-900 shrink-0"
+            title="刷新"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+          </Button>
+        </div>
+      </header>
 
+      {/* ── 主体：推文列表 + AI 面板，flex-1 填满 header 下方全部空间 ── */}
+      <div className="relative z-10 flex min-h-0 flex-1 overflow-hidden">
 
-
-        {/* ── 主体：推文列表 + AI 面板 ── */}
-        <div className="flex-1 flex overflow-hidden min-h-0">
-
-          {/* 左侧：推文列表 */}
-          <div className="flex flex-col overflow-hidden min-w-0 flex-1">
+        {/* 左侧：推文列表 */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden min-w-0">
             {activeAccount.description && (
               <div className="shrink-0 px-4 py-1.5 border-b border-gray-200/60 bg-white/50">
                 <p className="text-xs text-black text-center truncate">{activeAccount.description}</p>
@@ -920,7 +1041,7 @@ export default function HomePage() {
                   </div>
                 )}
 
-                <div className="h-[env(safe-area-inset-bottom,2rem)]" />
+                {/* 移动端仅用上方 paddingBottom 预留安全区，不再加 spacer 避免双重留白 */}
               </div>
             </div>
           </div>
@@ -951,8 +1072,6 @@ export default function HomePage() {
               isChatLoading={isChatLoading}
               speechStatus={speechStatus}
               speechError={speechError}
-              isSpeechEnabled={isSpeechEnabled}
-              onToggleSpeech={handleSpeechToggle}
               onClose={() => setIsChatOpen(false)}
               onSendPreset={(text) => sendMessage(text, { includeQuotedSelection: false })}
               onInputChange={(value) => setInputText(value)}
@@ -974,7 +1093,7 @@ export default function HomePage() {
           )}
 
           {/* ── 桌面端：悬浮打开按钮 ── */}
-          {!isMobile && !effectiveChatOpen && (
+          {mounted && !isMobile && !effectiveChatOpen && (
             <div className="fixed right-0 z-[100] flex justify-end pointer-events-none top-1/2 -translate-y-1/2">
               <Button
                 onClick={() => setIsChatOpen(true)}
@@ -997,8 +1116,6 @@ export default function HomePage() {
               isChatLoading={isChatLoading}
               speechStatus={speechStatus}
               speechError={speechError}
-              isSpeechEnabled={isSpeechEnabled}
-              onToggleSpeech={handleSpeechToggle}
               onClose={() => setSheetState(sheetState === "full" ? "half" : "hidden")}
               onSendPreset={(text) => sendMessage(text, { includeQuotedSelection: false })}
               onInputChange={(value) => setInputText(value)}
@@ -1021,14 +1138,19 @@ export default function HomePage() {
             />
           )}
         </div>
-      </div>
 
-      {/* ── 手机端：重新打开 AI 的悬浮按钮（有已选推文但抽屉隐藏时显示） ── */}
-      {isMobile && sheetState === "hidden" && selectedTweet && (
+      {/* ── 手机端：重新打开 AI 的悬浮按钮（可拖动，不超出屏幕） ── */}
+      {isMobile && sheetState === "hidden" && (
         <button
-          className="fixed bottom-6 right-4 z-50 w-12 h-12 rounded-full bg-emerald-600 shadow-lg flex items-center justify-center touch-manipulation active:scale-95 transition-transform"
-          style={{ bottom: "calc(1.5rem + env(safe-area-inset-bottom, 0px))" }}
-          onClick={() => setSheetState("half")}
+          type="button"
+          className="fixed z-50 w-12 h-12 rounded-full bg-emerald-600 shadow-lg flex items-center justify-center touch-manipulation active:scale-95 transition-transform"
+          style={{
+            right: fabRight,
+            bottom: `calc(${fabBottom}px + env(safe-area-inset-bottom, 0px))`,
+            touchAction: "none",
+          }}
+          onTouchStart={handleFabTouchStart}
+          onPointerDown={handleFabPointerDown}
           aria-label="打开 AI 助手"
         >
           <Sparkles className="h-5 w-5 text-white" />
@@ -1068,8 +1190,18 @@ function TweetCard({
     const text = sel?.toString().trim()
     if (!text || text.length > 200) return
     try {
-      const rect = sel!.getRangeAt(0).getBoundingClientRect()
-      onTextSelect(text, rect.left + rect.width / 2, rect.bottom)
+      const range = sel!.getRangeAt(0)
+      const rect = range.getBoundingClientRect()
+      const rects = range.getClientRects()
+      let anchorY = rect.bottom
+      if (rects.length > 0) {
+        let maxBottom = rects[0].bottom
+        for (let i = 1; i < rects.length; i++) {
+          if (rects[i].bottom > maxBottom) maxBottom = rects[i].bottom
+        }
+        anchorY = maxBottom
+      }
+      onTextSelect(text, rect.left + rect.width / 2, anchorY)
       // 不在此处清除 selection，保持高亮让用户看到选中内容
     } catch {}
   }
