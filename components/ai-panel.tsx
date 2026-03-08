@@ -13,6 +13,7 @@ export interface AiMessage {
   role: "user" | "assistant"
   content: string
   quoted?: { text: string }
+  displayContent?: string
 }
 
 type SheetState = "hidden" | "half" | "full"
@@ -271,7 +272,7 @@ function MessageList({
                   </div>
                 )}
                 <div className="px-4 py-2 text-gray-900">
-                  {msg.content}
+                  {msg.displayContent ?? msg.content}
                 </div>
               </div>
             ) : (

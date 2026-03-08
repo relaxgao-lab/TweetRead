@@ -112,23 +112,24 @@ function getSelectionMode(text: string): SelectionMode {
 
 function buildLookupPrompt(text: string): string {
   if (getSelectionMode(text) === "wordOrPhrase") {
-    return `请解释我在这条推文里选中的这个英文单词或短语：「${text}」。
+    return `请解释我在【这段文字】里选中的这个英文单词或短语：「${text}」
 
 这次请使用“英语词典讲解”风格，目标是帮助中文用户真正学会它，而不是只看中文翻译。
 
-请严格按这个顺序组织，尽量简洁：
-1. 原词 / 原短语：原样写出
-2. 语境义：它在这条推文里的自然含义
-3. 用法提示：说明它在这里的语气、搭配、感情色彩、隐含意思，或为什么这样说
-4. 常见误区：如果容易按字面误解，或容易和别的表达混淆，顺手提醒一句
-5. 可替换表达：给 1 到 2 个这个语境里可替换的英文表达
-6. 英文例句：给 1 个简短自然的英文例句，并附中文翻译
+请严格按以下顺序，尽量简洁：
+
+1. 原词 / 原短语：原样写出，并标注词性（n. / v. / adj. 等）
+2. 语境义：它在这段文字里的自然含义
+3. 用法提示：语气、搭配、感情色彩、隐含意思，或为什么这样用
+4. 常见误区：容易按字面误解，或容易和别的表达混淆时提醒
+5. 可替换表达：1～2个这个语境里可替换的英文表达
+6. 英文例句：1个简短自然的例句（15词以内），附中文翻译
 
 补充要求：
-- 回答主体用中文，但保留关键英文表达
-- 如果这是俚语、缩写、梗、固定搭配或带语气的说法，要直接点明
-- 不要展开成长篇文章，像老师讲词汇重点
-- 不要脱离当前推文语境，不要只给词典式死定义`
+- 回答主体用中文，保留关键英文表达
+- 如果是俚语、缩写、梗、固定搭配或带语气的说法，直接点明
+- 不要展开成长篇文章，像老师讲词汇重点一样简洁
+- 不要脱离当前文字语境，不要只给词典式死定义`
   }
 
   return `请解释我在这条推文里选中的这句或这段英文：「${text}」。
@@ -440,6 +441,7 @@ export default function HomePage() {
 
     let touchStartY = 0
     let touchWasInside = false
+    let touchWasOnSelectableText = false
     const touchHandler = (e: TouchEvent) => {
       if (e.type === "touchend") {
         if (touchWasInside) runMomentum()
@@ -457,12 +459,14 @@ export default function HomePage() {
       if (!inside) return
       const touchY = touch.clientY
       if (e.type === "touchstart") {
+        touchWasOnSelectableText = (target as HTMLElement).closest?.(".select-text") != null
         touchStartY = touchY
         velocityBuffer.length = 0
         cancelAnimationFrame(momentumRaf)
         return
       }
       if (e.type === "touchmove") {
+        if (touchWasOnSelectableText) return
         const deltaY = touchStartY - touchY
         touchStartY = touchY
         const didScroll = scrollFeed(deltaY)
@@ -843,7 +847,7 @@ export default function HomePage() {
   // ── 发送消息（SSE 流式）──
   const sendMessage = useCallback(async (
     text: string,
-    options?: { tweetOverride?: Tweet; includeQuotedSelection?: boolean },
+    options?: { tweetOverride?: Tweet; includeQuotedSelection?: boolean; displayContent?: string },
   ) => {
     const targetTweet = options?.tweetOverride ?? selectedTweet
     if (!text.trim() || isChatLoading || !targetTweet) return
@@ -861,6 +865,7 @@ export default function HomePage() {
       role: "user",
       content: trimmedText,
       ...(activeQuotedSelection && { quoted: { text: activeQuotedSelection.text } }),
+      ...(options?.displayContent && { displayContent: options.displayContent }),
     }
 
     if (shouldResetMessages) setSelectedTweet(targetTweet)
@@ -950,11 +955,11 @@ export default function HomePage() {
     if (clearSelection) window.getSelection()?.removeAllRanges()
   }, [])
 
-  const openChatForSelection = useCallback((text: string, tweet: Tweet) => {
+  const openChatForSelection = useCallback((prompt: string, tweet: Tweet, displayContent?: string) => {
     if (isMobile) setSheetState("half")
     else if (!effectiveChatOpen) setIsChatOpen(true)
     setQuotedSelection(null)
-    return sendMessage(text, { tweetOverride: tweet, includeQuotedSelection: false })
+    return sendMessage(prompt, { tweetOverride: tweet, includeQuotedSelection: false, displayContent })
   }, [effectiveChatOpen, isMobile, sendMessage])
 
   const focusChatInput = useCallback(() => {
@@ -994,7 +999,11 @@ export default function HomePage() {
     const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text)
     if (!prompt) return
     closeSelectionMenu(true)
-    await openChatForSelection(prompt, tweet)
+    const displayContent =
+      actionId === "lookup" ? `查词：「${text}」` :
+      actionId === "pattern" ? `句型讲解：「${text}」` :
+      undefined
+    await openChatForSelection(prompt, tweet, displayContent)
   }, [closeSelectionMenu, focusChatInput, messages.length, openChatForSelection])
 
   const handleAssistantTextSelect = useCallback((selection: {
