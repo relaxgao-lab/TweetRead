@@ -468,8 +468,9 @@ export default function HomePage() {
         const didScroll = scrollFeed(deltaY)
         if (didScroll) {
           pushVelocity(deltaY)
-          e.preventDefault()
         }
+        // 在推文列表内时，无论是否发生滚动，都阻止默认行为，避免顶部/底部 overscroll 橡皮筋
+        e.preventDefault()
       }
     }
 
@@ -1128,7 +1129,7 @@ export default function HomePage() {
                 <p className="text-sm md:text-xs text-black text-center truncate">{activeAccount.description}</p>
               </div>
             )}
-            <div ref={feedScrollRef} className="flex-1 overflow-y-auto hide-vertical-scrollbar min-h-0">
+            <div ref={feedScrollRef} className="flex-1 overflow-y-auto overscroll-none hide-vertical-scrollbar min-h-0">
               <div className="max-w-2xl mx-auto" style={{ paddingBottom: isMobile ? "env(safe-area-inset-bottom, 16px)" : undefined }}>
                 {error && (
                   <div className="mx-4 mt-4 p-3 bg-red-50/90 border border-red-200 rounded-lg text-sm text-red-700 flex justify-between items-center">

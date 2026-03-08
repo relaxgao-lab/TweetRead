@@ -349,18 +349,38 @@ export default function TweetPage() {
   }, [router])
 
   // ── Tweet load ─────────────────────────────────────────────────────────────
-  useEffect(() => {
+  const loadTweet = useCallback(async () => {
     if (!tweetId) return
     setTweetLoading(true)
-    fetch(`/api/tweets/${tweetId}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.tweet) setTweet(data.tweet)
-        else setTweetError(data.error ?? "推文加载失败")
-      })
-      .catch(() => setTweetError("网络错误，请重试"))
-      .finally(() => setTweetLoading(false))
+    setTweetError(null)
+    try {
+      const res = await fetch(`/api/tweets/${tweetId}`)
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && data.tweet) {
+        setTweet(data.tweet)
+        return
+      }
+      // 根据状态码和 API 返回的 error 字段，给出用户可理解的提示
+      const apiError = typeof data?.error === "string" ? data.error : ""
+      if (res.status === 400) {
+        setTweetError(apiError || "请求参数错误，请检查链接后重试")
+      } else if (res.status === 404) {
+        setTweetError(apiError || "推文不存在或已被删除")
+      } else if (res.status >= 500) {
+        setTweetError(apiError || "服务暂时不可用，请稍后重试")
+      } else {
+        setTweetError(apiError || "推文加载失败，请重试")
+      }
+    } catch {
+      setTweetError("网络连接失败，请检查网络后重试")
+    } finally {
+      setTweetLoading(false)
+    }
   }, [tweetId])
+
+  useEffect(() => {
+    loadTweet()
+  }, [loadTweet])
 
   // ── Auto-scroll messages ───────────────────────────────────────────────────
   useEffect(() => {
@@ -637,9 +657,18 @@ export default function TweetPage() {
   if (tweetLoading) return <TweetSkeleton />
   if (tweetError || !tweet) {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center gap-4">
-        <p className="text-gray-500 text-sm">{tweetError ?? "推文不存在"}</p>
-        <Button variant="ghost" onClick={handleBack}>← 返回</Button>
+      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center gap-5 px-6">
+        <p className="text-gray-600 text-sm text-center max-w-[280px]">
+          {tweetError ?? "推文不存在"}
+        </p>
+        <div className="flex gap-3">
+          <Button variant="outline" onClick={loadTweet} disabled={tweetLoading}>
+            重试
+          </Button>
+          <Button variant="ghost" onClick={handleBack}>
+            ← 返回
+          </Button>
+        </div>
       </div>
     )
   }
