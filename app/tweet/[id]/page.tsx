@@ -9,6 +9,7 @@ import {
   ArrowLeft, Send, Mic, StopCircle, Volume2,
   Sparkles, ExternalLink, Heart, Repeat2, MessageCircle, Eye,
   ChevronDown,
+  ChevronUp,
 } from "lucide-react"
 import type { Tweet } from "@/lib/twitter"
 import { formatRelativeTime, formatCount } from "@/lib/twitter"
@@ -587,6 +588,34 @@ export default function TweetPage() {
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Mobile: floating up/down buttons on right edge, above preset prompts */}
+      {isMobile && (
+        <div className="absolute right-2 bottom-[calc(10.75rem+env(safe-area-inset-bottom,0px))] z-10 flex flex-col gap-0.5 shadow-sm bg-white/95 backdrop-blur-sm rounded-lg border border-gray-100">
+          {sheetState === "half" && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => setSheetState("full")}
+              className="h-7 w-7 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md touch-manipulation"
+              title="全屏"
+            >
+              <ChevronUp className="h-3.5 w-3.5" />
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => setSheetState(sheetState === "full" ? "half" : "hidden")}
+            className="h-7 w-7 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md touch-manipulation"
+            title={sheetState === "full" ? "缩小" : "收起"}
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      )}
+
       {/* Preset prompts */}
       <div className="shrink-0 px-4 py-2 border-t border-gray-100 bg-gray-50/80">
         <div className="flex flex-wrap gap-x-3 gap-y-2 pt-1">
@@ -902,37 +931,21 @@ export default function TweetPage() {
                     <Sparkles className="h-4 w-4 text-emerald-600 shrink-0" />
                     <h3 className="text-sm font-semibold text-gray-700">AI 解读助手</h3>
                   </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {sheetState === "full" && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setSheetState("half")}
-                        className="h-10 w-10 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md touch-manipulation"
-                        title="缩小"
-                      >
-                        <ChevronDown className="h-5 w-5" />
-                      </Button>
-                    )}
-                    {sheetState === "half" && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setSheetState("hidden")}
-                        className="h-10 w-10 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md touch-manipulation"
-                        title="收起"
-                      >
-                        <ChevronDown className="h-5 w-5" />
-                      </Button>
-                    )}
-                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setSheetState(sheetState === "full" ? "half" : "hidden")}
+                    className="h-10 w-10 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md touch-manipulation"
+                    title={sheetState === "full" ? "缩小" : "收起"}
+                  >
+                    <ChevronDown className="h-5 w-5" />
+                  </Button>
                 </div>
 
                 {/* Shared chat body */}
                 <div
-                  className="flex flex-col flex-1 min-h-0 overflow-hidden"
+                  className="flex flex-col flex-1 min-h-0 overflow-hidden relative"
                   style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
                 >
                   {chatBody}

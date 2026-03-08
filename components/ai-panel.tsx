@@ -2,7 +2,7 @@
 
 import type React from "react"
 import Image from "next/image"
-import { ChevronDown, ExternalLink, Mic, Send, Sparkles, StopCircle, Volume2, X } from "lucide-react"
+import { ChevronDown, ChevronUp, ExternalLink, Mic, Send, Sparkles, StopCircle, Volume2, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -62,6 +62,7 @@ type AiPanelProps = {
   onHandleTouchStart?: React.TouchEventHandler<HTMLDivElement>
   onHandleTouchMove?: React.TouchEventHandler<HTMLDivElement>
   onHandleTouchEnd?: React.TouchEventHandler<HTMLDivElement>
+  onExpand?: () => void
 }
 
 const PRESET_PROMPTS = [
@@ -490,10 +491,11 @@ function PanelBody(props: AiPanelProps) {
     formatTweetText,
     renderAssistantContent,
     sheetState,
+    onExpand,
   } = props
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden relative">
       <div className={`shrink-0 px-4 py-2 border-b border-gray-200 ${variant === "desktop" ? "bg-gray-50/80" : "bg-gray-50"} flex items-center justify-between gap-2`}>
         {variant === "desktop" ? (
           <div className="min-w-0">
@@ -547,6 +549,33 @@ function PanelBody(props: AiPanelProps) {
         messagesEndRef={messagesEndRef}
         onAssistantTextSelect={onAssistantTextSelect}
       />
+
+      {variant === "mobile" && (sheetState === "half" || sheetState === "full") && (
+        <div className="absolute right-2 bottom-[calc(10.75rem+env(safe-area-inset-bottom,0px))] z-10 flex flex-col gap-0.5 shadow-sm bg-white/95 backdrop-blur-sm rounded-lg border border-gray-100">
+          {sheetState === "half" && onExpand && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={onExpand}
+              className="h-7 w-7 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md touch-manipulation"
+              title="全屏"
+            >
+              <ChevronUp className="h-3.5 w-3.5" />
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            className="h-7 w-7 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md touch-manipulation"
+            title={sheetState === "full" ? "缩小" : "收起"}
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      )}
 
       <PresetPromptBar
         selectedTweet={selectedTweet}

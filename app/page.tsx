@@ -1283,6 +1283,7 @@ export default function HomePage() {
               speechStatus={speechStatus}
               speechError={speechError}
               onClose={() => setSheetState(sheetState === "full" ? "half" : "hidden")}
+              onExpand={() => setSheetState("full")}
               onSendPreset={(text) => sendMessage(text, { includeQuotedSelection: false })}
               onInputChange={(value) => setInputText(value)}
               onAssistantTextSelect={handleAssistantTextSelect}
