@@ -5,13 +5,14 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const userName = searchParams.get("userName")
   const cursor = searchParams.get("cursor") ?? undefined
+  const forceRefresh = searchParams.get("refresh") === "1" || searchParams.get("refresh") === "true"
 
   if (!userName) {
     return NextResponse.json({ error: "Missing userName" }, { status: 400 })
   }
 
   try {
-    const result = await fetchUserTweets(userName, cursor)
+    const result = await fetchUserTweets(userName, cursor, forceRefresh)
     return NextResponse.json(result)
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Unknown error"

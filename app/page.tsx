@@ -118,7 +118,7 @@ function buildLookupPrompt(text: string): string {
 
 请严格按以下顺序，尽量简洁：
 
-1. 原词 / 原短语：原样写出，并标注词性（n. / v. / adj. 等）
+1. 原词 / 原短语：原样写出，标注音标（IPA，如 /ˈeksəmpəl/），并标注词性（n. / v. / adj. 等）
 2. 语境义：它在这段文字里的自然含义
 3. 用法提示：语气、搭配、感情色彩、隐含意思，或为什么这样用
 4. 常见误区：容易按字面误解，或容易和别的表达混淆时提醒
@@ -127,6 +127,7 @@ function buildLookupPrompt(text: string): string {
 
 补充要求：
 - 回答主体用中文，保留关键英文表达
+- 单词或短语必须标注音标（IPA），方便用户知道如何发音
 - 如果是俚语、缩写、梗、固定搭配或带语气的说法，直接点明
 - 不要展开成长篇文章，像老师讲词汇重点一样简洁
 - 不要脱离当前文字语境，不要只给词典式死定义`
@@ -153,43 +154,14 @@ function buildLookupPrompt(text: string): string {
 }
 
 function buildPatternPrompt(text: string): string {
-  if (getSelectionMode(text) === "wordOrPhrase") {
-    return `请讲解我在这条推文里选中的这个英文短语或表达：「${text}」。
+  return `Please analyze the selected sentence comprehensively based on the context: 「${text}」
 
-这次请用“表达 / 句型讲解”的方式回答，重点帮助中文用户学会这个表达怎么用，而不是只解释字面意思。
+1. **Sentence Meaning**: Explain the literal meaning of the entire sentence.
+2. **Sentence Structure**: Annotate the sentence components directly on the original sentence, like grading homework. Use the format: [word or phrase]{component name}. For example: [Elon Musk]{Subject} [snapped]{Predicate} [a photo]{Object}. Components to annotate include: Subject, Predicate, Object, Attributive, Adverbial, Complement, Clause.
+3. **Key Phrase Analysis**: Explain the extended meaning, cultural background, or usage in specific contexts of core phrases (such as idioms, slang).
+4. **Contextual Dialogue**: Provide a realistic dialogue example using this sentence.
 
-请按这个顺序组织：
-1. 原表达：原样写出
-2. 这类表达在这里是什么意思
-3. 它常见的搭配或句型位置
-4. 使用场景：通常在什么语气或语境里会这样说
-5. 可替换说法：给 1 到 2 个自然替换
-6. 英文例句：给 1 个短例句，并附中文翻译
-
-补充要求：
-- 回答主体用中文，但保留关键英文
-- 如果这是固定搭配、俚语、网络表达或口语说法，要直接点明
-- 不要讲成语法教材，要更像老师讲“这个表达怎么用”
-- 不要脱离当前推文语境`
-  }
-
-  return `请讲解我在这条推文里选中的这个英文句子或片段的句型与表达方式：「${text}」。
-
-这次请用“句型讲解”风格回答，重点帮助中文用户理解这句话是怎么组织出来的、为什么这样说。
-
-请按这个顺序组织：
-1. 原句 / 原文：原样写出
-2. 句型骨架：用最简洁的话概括这句话的结构
-3. 关键表达块：拆出 2 到 4 个关键部分，说明各自作用
-4. 为什么这么说：解释这种表达在推文语境里的效果和语气
-5. 可迁移句型：总结一个值得模仿的表达模板
-6. 仿写例句：给 1 个可模仿的英文例句，并附中文翻译
-
-补充要求：
-- 回答主体用中文，但保留关键英文
-- 不要只做翻译，要解释结构和表达效果
-- 不要脱离当前推文语境
-- 保持简洁，像精讲一个句型`
+**Requirements**: All analysis should be provided in both English and Chinese, with clean formatting.`
 }
 
 function buildAssistantDraft(actionId: SelectionActionId): string {
@@ -246,8 +218,8 @@ const SELECTION_ACTIONS: Record<SelectionActionId, SelectionAction> = {
 }
 
 const PRIMARY_TWEET_SELECTION_ACTIONS: Record<SelectionMode, SelectionActionId[]> = {
-  wordOrPhrase: ["lookup", "pattern", "readAloud"],
-  sentenceOrPassage: ["lookup", "pattern", "readAloud"],
+  wordOrPhrase: ["lookup", "pattern", "quoteReply", "readAloud"],
+  sentenceOrPassage: ["lookup", "pattern", "quoteReply", "readAloud"],
 }
 
 const PRIMARY_ASSISTANT_SELECTION_ACTIONS: SelectionActionId[] = ["followUp", "explainReply", "translateReply", "quoteReply", "readAloud"]
@@ -313,6 +285,7 @@ export default function HomePage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const feedScrollRef = useRef<HTMLDivElement>(null)
+  const tweetsAbortRef = useRef<AbortController | null>(null)
   const transcriptCallback = useRef<((text: string) => void) | null>(null)
   const keepMenuOpenForReadAloudRef = useRef(false)
   // 桌面端：isChatOpen 控制右侧面板；手机端：sheetState 控制底部抽屉
@@ -796,26 +769,35 @@ export default function HomePage() {
   }, [])
 
   // ── 推文加载 ──
-  const loadTweets = useCallback(async (userName: string, cursor?: string) => {
+  const loadTweets = useCallback(async (userName: string, cursor?: string, forceRefresh?: boolean) => {
+    tweetsAbortRef.current?.abort()
+    const controller = new AbortController()
+    tweetsAbortRef.current = controller
+
     const isLoadMore = !!cursor
     if (isLoadMore) setLoadingMore(true); else setLoading(true)
     setError(null)
     try {
       const params = new URLSearchParams({ userName })
       if (cursor) params.set("cursor", cursor)
-      const res = await fetch(`/api/tweets?${params}`)
+      if (forceRefresh) params.set("refresh", "1")
+      const res = await fetch(`/api/tweets?${params}`, { cache: "no-store", signal: controller.signal })
       if (!res.ok) throw new Error(`Error ${res.status}`)
       const data = await res.json()
-      const incoming: Tweet[] = data.tweets
+      const incoming: Tweet[] = data.tweets ?? []
       setCache((prev) => {
         const existing = prev[userName]?.tweets ?? []
         return { ...prev, [userName]: { tweets: isLoadMore ? [...existing, ...incoming] : incoming, hasMore: data.hasMore, nextCursor: data.nextCursor, loadedAt: Date.now() } }
       })
       translateTweets(userName, incoming)
     } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return
       setError(e instanceof Error ? e.message : "加载失败")
     } finally {
-      setLoading(false); setLoadingMore(false)
+      if (tweetsAbortRef.current === controller) {
+        setLoading(false)
+        setLoadingMore(false)
+      }
     }
   }, [translateTweets])
 
@@ -847,7 +829,7 @@ export default function HomePage() {
   // ── 发送消息（SSE 流式）──
   const sendMessage = useCallback(async (
     text: string,
-    options?: { tweetOverride?: Tweet; includeQuotedSelection?: boolean; displayContent?: string },
+    options?: { tweetOverride?: Tweet; includeQuotedSelection?: boolean; displayContent?: string; quotedSelectionOverride?: QuotedSelectionState },
   ) => {
     const targetTweet = options?.tweetOverride ?? selectedTweet
     if (!text.trim() || isChatLoading || !targetTweet) return
@@ -855,9 +837,11 @@ export default function HomePage() {
     const shouldResetMessages = selectedTweet?.id !== targetTweet.id
     const baseMessages = shouldResetMessages ? [] : messages
     const trimmedText = text.trim()
-    const activeQuotedSelection = options?.includeQuotedSelection === false || shouldResetMessages
-      ? null
-      : quotedSelection
+    const activeQuotedSelection = options?.quotedSelectionOverride ?? (
+      options?.includeQuotedSelection === false || shouldResetMessages
+        ? null
+        : quotedSelection
+    )
     const requestText = activeQuotedSelection
       ? buildQuotedFollowUpMessage(trimmedText, activeQuotedSelection)
       : trimmedText
@@ -983,16 +967,37 @@ export default function HomePage() {
       return
     }
 
+    if (selection.source === "tweet" && actionId === "quoteReply") {
+      setSelectedTweet(tweet)
+      setInputText((current) => mergeDraftText(current, `「${text}」`))
+      closeSelectionMenu(true)
+      focusChatInput()
+      return
+    }
+
     if (selection.source === "assistantReply") {
-      setQuotedSelection({
+      const quotedSelectionObj: QuotedSelectionState = {
         text,
         sourceRole: "assistant",
         messageIndex: selection.messageIndex ?? messages.length - 1,
         fullMessageContent: selection.fullMessageContent ?? text,
-      })
-      setInputText((current) => mergeDraftText(current, SELECTION_ACTIONS[actionId].buildDraft?.() ?? ""))
-      closeSelectionMenu(true)
-      focusChatInput()
+      }
+      if (actionId === "followUp" || actionId === "explainReply" || actionId === "translateReply") {
+        const question = buildAssistantDraft(actionId)
+        closeSelectionMenu(true)
+        if (isMobile) setSheetState("half")
+        else if (!effectiveChatOpen) setIsChatOpen(true)
+        const displayContent =
+          actionId === "followUp" ? "追问这段" :
+          actionId === "explainReply" ? "解释这段" :
+          "翻译这段"
+        await sendMessage(question, { quotedSelectionOverride: quotedSelectionObj, displayContent })
+      } else {
+        setQuotedSelection(quotedSelectionObj)
+        setInputText((current) => mergeDraftText(current, SELECTION_ACTIONS[actionId].buildDraft?.() ?? ""))
+        closeSelectionMenu(true)
+        focusChatInput()
+      }
       return
     }
 
@@ -1004,7 +1009,7 @@ export default function HomePage() {
       actionId === "pattern" ? `句型讲解：「${text}」` :
       undefined
     await openChatForSelection(prompt, tweet, displayContent)
-  }, [closeSelectionMenu, focusChatInput, messages.length, openChatForSelection])
+  }, [closeSelectionMenu, effectiveChatOpen, focusChatInput, isMobile, messages.length, openChatForSelection, sendMessage])
 
   const handleAssistantTextSelect = useCallback((selection: {
     text: string
@@ -1118,7 +1123,7 @@ export default function HomePage() {
           </div>
           <Button
             variant="ghost" size="icon"
-            onClick={() => loadTweets(activeTab)}
+            onClick={() => loadTweets(activeTab, undefined, true)}
             disabled={loading}
             className="text-gray-500 hover:text-gray-900 shrink-0"
             title="刷新"
@@ -1143,7 +1148,7 @@ export default function HomePage() {
                 {error && (
                   <div className="mx-4 mt-4 p-3 bg-red-50/90 border border-red-200 rounded-lg text-sm text-red-700 flex justify-between items-center">
                     <span>{error}</span>
-                    <Button variant="ghost" size="sm" onClick={() => loadTweets(activeTab)}>重试</Button>
+                    <Button variant="ghost" size="sm" onClick={() => loadTweets(activeTab, undefined, true)}>重试</Button>
                   </div>
                 )}
 
@@ -1437,13 +1442,12 @@ function TweetCard({
           )}
           <div className="mt-2.5 flex items-center gap-4 text-sm md:text-xs text-gray-400">
             <span className="flex items-center gap-1"><Heart className="h-3.5 w-3.5" />{formatCount(tweet.likeCount)}</span>
-            <span className="flex items-center gap-1"><Repeat2 className="h-3.5 w-3.5" />{formatCount(tweet.retweetCount)}</span>
             <span className="flex items-center gap-1"><MessageCircle className="h-3.5 w-3.5" />{formatCount(tweet.replyCount)}</span>
             {tweet.viewCount > 0 && (
               <span className="flex items-center gap-1"><Eye className="h-3.5 w-3.5" />{formatCount(tweet.viewCount)}</span>
             )}
             <button
-              className="ml-auto inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-emerald-600 hover:bg-emerald-50 active:scale-95 touch-manipulation transition-transform"
+              className="ml-auto inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1.5 text-emerald-600 hover:bg-emerald-50 active:scale-95 touch-manipulation transition-transform"
               onClick={(e) => { e.stopPropagation(); onAiClick() }}
               aria-label="推文分析"
               title="推文分析"
