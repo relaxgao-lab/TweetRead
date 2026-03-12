@@ -2,13 +2,12 @@
 
 import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react"
 import Image from "next/image"
-
 import { AiPanel, type AiMessage } from "@/components/ai-panel"
 import { SelectionActionMenu } from "@/components/selection-action-menu"
 import { ACCOUNTS } from "@/config/accounts"
 import type { Tweet } from "@/lib/twitter"
 import { formatRelativeTime, formatCount } from "@/lib/twitter"
-import { Heart, Repeat2, MessageCircle, Eye, RefreshCw, ChevronDown, Sparkles } from "lucide-react"
+import { Heart, Repeat2, MessageCircle, Eye, RefreshCw, ChevronDown, ChevronLeft, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { whisperSpeechService, type SpeechStatus } from "@/app/conversation/whisper-speech-service"
 
@@ -246,6 +245,18 @@ export default function HomePage() {
   const [speechStatus, setSpeechStatus] = useState<SpeechStatus>("idle")
   const [speechError, setSpeechError] = useState<string | null>(null)
   const [isSpeechEnabled, setIsSpeechEnabled] = useState(true)
+
+  // ── 左侧内容区域：feed | detail ──
+  const [leftView, setLeftView] = useState<"feed" | "detail">("feed")
+  const [detailTweet, setDetailTweet] = useState<Tweet | null>(null)
+
+  // ── 评论视图（用于详情页内联展示）──
+  const [commentsForTweet, setCommentsForTweet] = useState<Tweet | null>(null)
+  const [comments, setComments] = useState<Tweet[]>([])
+  const [commentsHasMore, setCommentsHasMore] = useState(false)
+  const [commentsCursor, setCommentsCursor] = useState<string | undefined>(undefined)
+  const [commentsLoading, setCommentsLoading] = useState(false)
+  const [commentsError, setCommentsError] = useState<string | null>(null)
 
   // ── AI 面板：宽度 + 开关 ──
   const [chatWidth, setChatWidth] = useState(DEFAULT_CHAT_WIDTH)
@@ -801,6 +812,37 @@ export default function HomePage() {
     }
   }, [translateTweets])
 
+  // ── 评论加载 ──
+  const loadComments = useCallback(async (tweet: Tweet, cursor?: string) => {
+    setCommentsError(null)
+    setCommentsLoading(true)
+
+    // 切换到新推文时重置列表
+    if (!cursor || commentsForTweet?.id !== tweet.id) {
+      setCommentsForTweet(tweet)
+      setComments([])
+      setCommentsCursor(undefined)
+      setCommentsHasMore(false)
+    }
+
+    try {
+      const params = new URLSearchParams({ id: tweet.id })
+      if (cursor) params.set("cursor", cursor)
+      const res = await fetch(`/api/tweet-conversation?${params.toString()}`, { cache: "no-store" })
+      if (!res.ok) throw new Error(`Error ${res.status}`)
+      const data = await res.json()
+      const incoming: Tweet[] = data.comments ?? []
+
+      setComments((prev) => (cursor && commentsForTweet?.id === tweet.id ? [...prev, ...incoming] : incoming))
+      setCommentsHasMore(Boolean(data.hasMore))
+      setCommentsCursor(data.nextCursor as string | undefined)
+    } catch (e) {
+      setCommentsError(e instanceof Error ? e.message : "加载评论失败")
+    } finally {
+      setCommentsLoading(false)
+    }
+  }, [commentsForTweet])
+
   useEffect(() => {
     const cached = cache[activeTab]
     if (!cached || Date.now() - cached.loadedAt > 5 * 60 * 1000) loadTweets(activeTab)
@@ -1081,6 +1123,20 @@ export default function HomePage() {
     else if (!effectiveChatOpen) setIsChatOpen(true)
   }
 
+  const handleOpenDetail = (tweet: Tweet) => {
+    setDetailTweet(tweet)
+    setLeftView("detail")
+    setSelectedTweet(tweet)
+    void loadComments(tweet)
+    if (isMobile) setSheetState("half")
+    else if (!effectiveChatOpen) setIsChatOpen(true)
+  }
+
+  const handleBackToFeed = () => {
+    setDetailTweet(null)
+    setLeftView("feed")
+  }
+
   const noTransition = !allowChatTransition || isResizing || justRestoredOpenRef.current
   const primarySelectionActions = selectionMenu
     ? (
@@ -1103,13 +1159,24 @@ export default function HomePage() {
       {/* ── Header：始终流式布局，safe-area-top 保证刘海屏正常，sticky 确保手机端可见 ── */}
       <header className="sticky top-0 z-20 shrink-0 bg-white/80 border-b border-gray-200 shadow-sm backdrop-blur-sm pt-[env(safe-area-inset-top)]">
         <div className="px-4 py-2.5 flex items-center gap-3">
+          {leftView === "detail" && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleBackToFeed}
+              className="gap-1 text-gray-600 hover:text-gray-900 shrink-0 -ml-1"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              返回
+            </Button>
+          )}
           <h1 className="text-xl md:text-lg font-bold text-gray-900 tracking-tight shrink-0">TweetRead</h1>
           {/* Tab 栏 */}
           <div className="flex-1 flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {ACCOUNTS.map((account) => (
               <button
                 key={account.userName}
-                onClick={() => { setActiveTab(account.userName); setError(null) }}
+                onClick={() => { setActiveTab(account.userName); setError(null); setLeftView("feed"); setDetailTweet(null) }}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-base md:text-sm font-medium whitespace-nowrap transition-all ${
                   activeTab === account.userName
                     ? "bg-gray-900 text-white"
@@ -1136,86 +1203,112 @@ export default function HomePage() {
       {/* ── 主体：推文列表 + AI 面板，flex-1 填满 header 下方全部空间 ── */}
       <div className="relative z-10 flex min-h-0 flex-1 overflow-hidden">
 
-        {/* 左侧：推文列表 */}
+        {/* 左侧：内容区域（推文列表 / 详情页切换） */}
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden min-w-0">
-            {activeAccount.description && (
-              <div className="shrink-0 px-4 py-1.5 border-b border-gray-200/60 bg-white/50">
-                <p className="text-sm md:text-xs text-black text-center truncate">{activeAccount.description}</p>
-              </div>
-            )}
-            <div ref={feedScrollRef} className="flex-1 overflow-y-auto overscroll-none hide-vertical-scrollbar min-h-0">
-              <div className="max-w-2xl mx-auto" style={{ paddingBottom: isMobile ? "env(safe-area-inset-bottom, 16px)" : undefined }}>
-                {error && (
-                  <div className="mx-4 mt-4 p-3 bg-red-50/90 border border-red-200 rounded-lg text-sm text-red-700 flex justify-between items-center">
-                    <span>{error}</span>
-                    <Button variant="ghost" size="sm" onClick={() => loadTweets(activeTab, undefined, true)}>重试</Button>
-                  </div>
-                )}
+          {leftView === "feed" ? (
+            <>
+              {activeAccount.description && (
+                <div className="shrink-0 px-4 py-1.5 border-b border-gray-200/60 bg-white/50">
+                  <p className="text-sm md:text-xs text-black text-center truncate">{activeAccount.description}</p>
+                </div>
+              )}
+              <div ref={feedScrollRef} className="flex-1 overflow-y-auto overscroll-none hide-vertical-scrollbar min-h-0">
+                <div className="max-w-2xl mx-auto" style={{ paddingBottom: isMobile ? "env(safe-area-inset-bottom, 16px)" : undefined }}>
+                  {error && (
+                    <div className="mx-4 mt-4 p-3 bg-red-50/90 border border-red-200 rounded-lg text-sm text-red-700 flex justify-between items-center">
+                      <span>{error}</span>
+                      <Button variant="ghost" size="sm" onClick={() => loadTweets(activeTab, undefined, true)}>重试</Button>
+                    </div>
+                  )}
 
-                {loading && tweets.length === 0 && (
-                  <div className="flex flex-col gap-3 p-4">
-                    {[...Array(5)].map((_, i) => (
-                      <div key={i} className="bg-white/80 rounded-xl p-4 border border-gray-200/80 animate-pulse">
-                        <div className="flex gap-3">
-                          <div className="w-10 h-10 rounded-full bg-gray-200 shrink-0" />
-                          <div className="flex-1 space-y-2">
-                            <div className="h-3 bg-gray-200 rounded w-1/3" />
-                            <div className="h-3 bg-gray-200 rounded w-full" />
-                            <div className="h-3 bg-gray-200 rounded w-4/5" />
+                  {loading && tweets.length === 0 && (
+                    <div className="flex flex-col gap-3 p-4">
+                      {[...Array(5)].map((_, i) => (
+                        <div key={i} className="bg-white/80 rounded-xl p-4 border border-gray-200/80 animate-pulse">
+                          <div className="flex gap-3">
+                            <div className="w-10 h-10 rounded-full bg-gray-200 shrink-0" />
+                            <div className="flex-1 space-y-2">
+                              <div className="h-3 bg-gray-200 rounded w-1/3" />
+                              <div className="h-3 bg-gray-200 rounded w-full" />
+                              <div className="h-3 bg-gray-200 rounded w-4/5" />
+                            </div>
                           </div>
                         </div>
-                      </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {!loading && tweets.length === 0 && !error && (
+                    <div className="text-center py-16 text-gray-400 text-sm">暂无推文</div>
+                  )}
+
+                  <div className="divide-y divide-gray-100/80">
+                    {tweets.map((tweet, idx) => (
+                      <TweetCard
+                        key={tweet.id}
+                        tweet={tweet}
+                        index={idx}
+                        isSelected={selectedTweet?.id === tweet.id}
+                        onAiClick={() => handleOpenAI(tweet)}
+                        onOpenComments={handleOpenDetail}
+                        onTextSelect={(text, ax, ay) => {
+                          setPendingSelectionActionId(null)
+                          setSelectionMenu({
+                            text,
+                            anchorX: ax,
+                            anchorY: ay,
+                            tweet,
+                            mode: getSelectionMode(text),
+                            source: "tweet",
+                          })
+                        }}
+                        isMobile={isMobile}
+                      />
                     ))}
                   </div>
-                )}
 
-                {!loading && tweets.length === 0 && !error && (
-                  <div className="text-center py-16 text-gray-400 text-sm">暂无推文</div>
-                )}
-
-                <div className="divide-y divide-gray-100/80">
-                  {tweets.map((tweet, idx) => (
-                    <TweetCard
-                      key={tweet.id}
-                      tweet={tweet}
-                      index={idx}
-                      isSelected={selectedTweet?.id === tweet.id}
-                      onAiClick={() => handleOpenAI(tweet)}
-                      onTextSelect={(text, ax, ay) => {
-                        setPendingSelectionActionId(null)
-                        setSelectionMenu({
-                          text,
-                          anchorX: ax,
-                          anchorY: ay,
-                          tweet,
-                          mode: getSelectionMode(text),
-                          source: "tweet",
-                        })
-                      }}
-                      isMobile={isMobile}
-                    />
-                  ))}
+                  {current?.hasMore && (
+                    <div className="flex justify-center py-6">
+                      <Button
+                        variant="outline" size="sm"
+                        onClick={() => current?.nextCursor && loadTweets(activeTab, current.nextCursor)}
+                        disabled={loadingMore}
+                        className="gap-2 bg-white/80 backdrop-blur-sm"
+                      >
+                        {loadingMore
+                          ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" />加载中...</>
+                          : <><ChevronDown className="h-3.5 w-3.5" />加载更多</>}
+                      </Button>
+                    </div>
+                  )}
                 </div>
-
-                {current?.hasMore && (
-                  <div className="flex justify-center py-6">
-                    <Button
-                      variant="outline" size="sm"
-                      onClick={() => current?.nextCursor && loadTweets(activeTab, current.nextCursor)}
-                      disabled={loadingMore}
-                      className="gap-2 bg-white/80 backdrop-blur-sm"
-                    >
-                      {loadingMore
-                        ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" />加载中...</>
-                        : <><ChevronDown className="h-3.5 w-3.5" />加载更多</>}
-                    </Button>
-                  </div>
-                )}
-
-                {/* 移动端仅用上方 paddingBottom 预留安全区，不再加 spacer 避免双重留白 */}
               </div>
-            </div>
-          </div>
+            </>
+          ) : detailTweet ? (
+            <DetailView
+              rootTweet={detailTweet}
+              comments={comments}
+              commentsLoading={commentsLoading}
+              commentsError={commentsError}
+              commentsHasMore={commentsHasMore}
+              onLoadMore={() => commentsForTweet && commentsHasMore && commentsCursor && void loadComments(commentsForTweet, commentsCursor)}
+              onAiClick={() => handleOpenAI(detailTweet)}
+              onTextSelect={(text, ax, ay) => {
+                setPendingSelectionActionId(null)
+                setSelectionMenu({
+                  text,
+                  anchorX: ax,
+                  anchorY: ay,
+                  tweet: detailTweet,
+                  mode: getSelectionMode(text),
+                  source: "tweet",
+                })
+              }}
+              isMobile={isMobile}
+              style={{ paddingBottom: isMobile ? "env(safe-area-inset-bottom, 16px)" : undefined }}
+            />
+          ) : null}
+        </div>
 
           {/* ── 桌面端：拖拽条 ── */}
           {!isMobile && (
@@ -1343,19 +1436,248 @@ export default function HomePage() {
           }}
         />
       )}
+
     </div>
+  )
+}
+
+// ─── DetailView 组件（左侧详情页：推文 + 评论）────────────────────────────────────
+type DetailViewProps = {
+  rootTweet: Tweet
+  comments: Tweet[]
+  commentsLoading: boolean
+  commentsError: string | null
+  commentsHasMore: boolean
+  onLoadMore: () => void
+  onAiClick: () => void
+  onTextSelect?: (text: string, anchorX: number, anchorY: number) => void
+  isMobile: boolean
+  style?: React.CSSProperties
+}
+
+function DetailView({
+  rootTweet,
+  comments,
+  commentsLoading,
+  commentsError,
+  commentsHasMore,
+  onLoadMore,
+  onAiClick,
+  onTextSelect,
+  isMobile,
+  style,
+}: DetailViewProps) {
+  const readSelection = () => {
+    if (!onTextSelect) return
+    const sel = window.getSelection()
+    const text = sel?.toString().trim()
+    if (!text || text.length > 200) return
+    try {
+      const range = sel!.getRangeAt(0)
+      const rect = range.getBoundingClientRect()
+      const rects = range.getClientRects()
+      let anchorY = rect.bottom
+      if (rects.length > 0) {
+        let maxBottom = rects[0].bottom
+        for (let i = 1; i < rects.length; i++) {
+          if (rects[i].bottom > maxBottom) maxBottom = rects[i].bottom
+        }
+        anchorY = maxBottom
+      }
+      onTextSelect(text, rect.left + rect.width / 2, anchorY)
+    } catch {}
+  }
+
+  const handleMouseUp = () => readSelection()
+  const handleTouchEnd = () => {
+    if (!isMobile) return
+    requestAnimationFrame(() => readSelection())
+  }
+
+  return (
+    <>
+      <div className="flex-1 overflow-y-auto overscroll-none hide-vertical-scrollbar min-h-0">
+        <div className="max-w-2xl mx-auto px-4" style={style}>
+          {/* 原推文 */}
+          <div className="py-4 border-b border-gray-100">
+            <div className="flex gap-3">
+              <div className="shrink-0">
+                {rootTweet.author.profilePicture ? (
+                  <Image
+                    src={rootTweet.author.profilePicture}
+                    alt={rootTweet.author.name}
+                    width={40}
+                    height={40}
+                    className="w-10 h-10 rounded-full object-cover"
+                    unoptimized
+                  />
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 text-sm font-bold">
+                    {rootTweet.author.name?.[0] ?? "?"}
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-baseline gap-1.5 flex-wrap">
+                  <span className="font-semibold text-sm text-gray-900 truncate">{rootTweet.author.name}</span>
+                  <span className="text-sm md:text-xs text-gray-400 shrink-0">@{rootTweet.author.userName}</span>
+                  <span className="text-sm md:text-xs text-gray-300 shrink-0">·</span>
+                  <span className="text-sm md:text-xs text-gray-400 shrink-0">{formatRelativeTime(rootTweet.createdAt)}</span>
+                </div>
+                <p
+                  className="mt-1.5 text-base md:text-sm text-gray-800 leading-relaxed whitespace-pre-wrap break-words select-text"
+                  onMouseUp={handleMouseUp}
+                  onTouchEnd={handleTouchEnd}
+                >
+                  {smartCase(rootTweet.text)}
+                </p>
+                {rootTweet.textZh && (
+                  <p
+                    className="mt-1 text-base md:text-sm text-gray-500 leading-relaxed whitespace-pre-wrap break-words select-text"
+                    onMouseUp={handleMouseUp}
+                    onTouchEnd={handleTouchEnd}
+                  >
+                    {rootTweet.textZh}
+                  </p>
+                )}
+                {rootTweet.media.length > 0 && rootTweet.media[0].type === "photo" && rootTweet.media[0].url && (
+                  <div className="mt-2 rounded-xl overflow-hidden border border-gray-200/80">
+                    <img src={rootTweet.media[0].url} alt="media" className="w-full max-h-48 object-cover" loading="lazy" />
+                  </div>
+                )}
+                <div className="mt-2.5 flex items-center gap-4 text-sm md:text-xs text-gray-400">
+                  <span className="flex items-center gap-1"><Heart className="h-3.5 w-3.5" />{formatCount(rootTweet.likeCount)}</span>
+                  <span className="flex items-center gap-1"><MessageCircle className="h-3.5 w-3.5" />{formatCount(rootTweet.replyCount)}</span>
+                  {rootTweet.viewCount > 0 && (
+                    <span className="flex items-center gap-1"><Eye className="h-3.5 w-3.5" />{formatCount(rootTweet.viewCount)}</span>
+                  )}
+                  <button
+                    className="ml-auto inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1.5 text-emerald-600 hover:bg-emerald-50 active:scale-95 touch-manipulation transition-transform"
+                    onClick={onAiClick}
+                    aria-label="推文分析"
+                    title="推文分析"
+                  >
+                    <Sparkles className="h-3.5 w-3.5" />
+                    <span className="text-sm md:text-xs font-medium">推文分析</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* 评论列表 */}
+          <div className="py-3">
+            <div className="text-sm font-medium text-gray-700 mb-3">评论</div>
+            <div className="divide-y divide-gray-100">
+              {comments.map((c) => (
+                <div key={c.id} className="py-3 text-sm">
+                  <div className="flex gap-3">
+                    <div className="shrink-0">
+                      {c.author.profilePicture ? (
+                        <Image
+                          src={c.author.profilePicture}
+                          alt={c.author.name}
+                          width={32}
+                          height={32}
+                          className="w-8 h-8 rounded-full object-cover"
+                          unoptimized
+                        />
+                      ) : (
+                        <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 text-xs font-bold">
+                          {c.author.name?.[0] ?? "?"}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-baseline gap-1.5 flex-wrap">
+                        <span className="font-medium text-gray-900 truncate">{c.author.name}</span>
+                        <span className="text-xs text-gray-400 shrink-0">@{c.author.userName}</span>
+                        <span className="text-xs text-gray-300 shrink-0">·</span>
+                        <span className="text-xs text-gray-400 shrink-0">{formatRelativeTime(c.createdAt)}</span>
+                      </div>
+                      <p
+                        className="mt-1 text-gray-800 whitespace-pre-wrap break-words select-text"
+                        onMouseUp={handleMouseUp}
+                        onTouchEnd={handleTouchEnd}
+                      >
+                        {smartCase(c.text)}
+                      </p>
+                      {c.textZh && (
+                        <p
+                          className="mt-1 text-gray-500 whitespace-pre-wrap break-words select-text"
+                          onMouseUp={handleMouseUp}
+                          onTouchEnd={handleTouchEnd}
+                        >
+                          {c.textZh}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {commentsLoading && comments.length === 0 && (
+                <div className="py-6 text-center text-xs text-gray-400">加载评论中...</div>
+              )}
+              {!commentsLoading && comments.length === 0 && !commentsError && (
+                <div className="py-8 text-center text-xs text-gray-400">暂无评论</div>
+              )}
+              {commentsError && (
+                <div className="py-3 text-xs text-red-600 flex items-center justify-between bg-red-50 rounded-lg px-3">
+                  <span>{commentsError}</span>
+                  <button
+                    type="button"
+                    className="text-[11px] text-red-600 underline-offset-2 hover:underline"
+                    onClick={onLoadMore}
+                  >
+                    重试
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {commentsHasMore && !commentsError && (
+            <div className="pb-6">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={commentsLoading}
+                className="w-full justify-center gap-2"
+                onClick={onLoadMore}
+              >
+                {commentsLoading ? (
+                  <>
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                    加载中...
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="h-3.5 w-3.5" />
+                    加载更多评论
+                  </>
+                )}
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+    </>
   )
 }
 
 // ─── TweetCard 组件 ────────────────────────────────────────────────────────────
 function TweetCard({
-  tweet, index, isSelected, onTextSelect, onAiClick, isMobile,
+  tweet, index, isSelected, onTextSelect, onAiClick, onOpenComments, isMobile,
 }: {
   tweet: Tweet; index: number; isSelected: boolean
   onTextSelect?: (text: string, anchorX: number, anchorY: number) => void
   onAiClick: () => void
+  onOpenComments: (tweet: Tweet) => void
   isMobile: boolean
 }) {
+  const [isExpanded, setIsExpanded] = useState(false)
+
   const readSelection = () => {
     if (!onTextSelect) return
     const sel = window.getSelection()
@@ -1386,6 +1708,10 @@ function TweetCard({
     if (!isMobile) return
     requestAnimationFrame(() => readSelection())
   }
+
+  const shouldShowExpand =
+    (tweet.text && tweet.text.length > 140) ||
+    (tweet.textZh && tweet.textZh.length > 80)
 
   return (
     <article
@@ -1420,7 +1746,9 @@ function TweetCard({
             <span className="text-sm md:text-xs text-gray-400 shrink-0">{formatRelativeTime(tweet.createdAt)}</span>
           </div>
           <p
-            className="mt-1.5 text-base md:text-sm text-gray-800 leading-relaxed whitespace-pre-wrap break-words line-clamp-6 select-text"
+            className={`mt-1.5 text-base md:text-sm text-gray-800 leading-relaxed whitespace-pre-wrap break-words select-text ${
+              isExpanded ? "" : "line-clamp-6"
+            }`}
             onMouseUp={handleMouseUp}
             onTouchEnd={handleTouchEnd}
           >
@@ -1428,12 +1756,23 @@ function TweetCard({
           </p>
           {tweet.textZh && (
             <p
-              className="mt-1 text-base md:text-sm text-gray-500 leading-relaxed whitespace-pre-wrap break-words line-clamp-4 select-text"
+              className={`mt-1 text-base md:text-sm text-gray-500 leading-relaxed whitespace-pre-wrap break-words select-text ${
+                isExpanded ? "" : "line-clamp-4"
+              }`}
               onMouseUp={handleMouseUp}
               onTouchEnd={handleTouchEnd}
             >
               {tweet.textZh}
             </p>
+          )}
+          {shouldShowExpand && (
+            <button
+              type="button"
+              className="mt-1.5 text-xs md:text-[11px] text-emerald-600 hover:text-emerald-700 font-medium"
+              onClick={(e) => { e.stopPropagation(); setIsExpanded((prev) => !prev) }}
+            >
+              {isExpanded ? "收起" : "展开全文"}
+            </button>
           )}
           {tweet.media.length > 0 && tweet.media[0].type === "photo" && tweet.media[0].url && (
             <div className="mt-2 rounded-xl overflow-hidden border border-gray-200/80">
@@ -1442,7 +1781,14 @@ function TweetCard({
           )}
           <div className="mt-2.5 flex items-center gap-4 text-sm md:text-xs text-gray-400">
             <span className="flex items-center gap-1"><Heart className="h-3.5 w-3.5" />{formatCount(tweet.likeCount)}</span>
-            <span className="flex items-center gap-1"><MessageCircle className="h-3.5 w-3.5" />{formatCount(tweet.replyCount)}</span>
+            <button
+              type="button"
+              className="flex items-center gap-1 hover:text-emerald-600"
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); onOpenComments(tweet) }}
+            >
+              <MessageCircle className="h-3.5 w-3.5" />
+              {formatCount(tweet.replyCount)}
+            </button>
             {tweet.viewCount > 0 && (
               <span className="flex items-center gap-1"><Eye className="h-3.5 w-3.5" />{formatCount(tweet.viewCount)}</span>
             )}
@@ -1459,6 +1805,166 @@ function TweetCard({
         </div>
       </div>
     </article>
+  )
+}
+
+type CommentsOverlayProps = {
+  rootTweet: Tweet
+  comments: Tweet[]
+  loading: boolean
+  error: string | null
+  hasMore: boolean
+  onLoadMore: () => void
+  onClose: () => void
+}
+
+function CommentsOverlay({
+  rootTweet,
+  comments,
+  loading,
+  error,
+  hasMore,
+  onLoadMore,
+  onClose,
+}: CommentsOverlayProps) {
+  return (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/30 px-3">
+      <div className="w-full max-w-2xl max-h-[90vh] rounded-2xl bg-white shadow-xl flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+          <span className="text-sm font-medium text-gray-900">推文评论</span>
+          <button
+            type="button"
+            className="text-xs text-gray-500 hover:text-gray-800"
+            onClick={onClose}
+          >
+            关闭
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          {/* 原推文 */}
+          <div className="px-4 py-3 border-b border-gray-100">
+            <div className="flex gap-3">
+              <div className="shrink-0">
+                {rootTweet.author.profilePicture ? (
+                  <Image
+                    src={rootTweet.author.profilePicture}
+                    alt={rootTweet.author.name}
+                    width={36}
+                    height={36}
+                    className="w-9 h-9 rounded-full object-cover"
+                    unoptimized
+                  />
+                ) : (
+                  <div className="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 text-xs font-bold">
+                    {rootTweet.author.name?.[0] ?? "?"}
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-baseline gap-1.5 flex-wrap">
+                  <span className="font-semibold text-sm text-gray-900 truncate">{rootTweet.author.name}</span>
+                  <span className="text-xs text-gray-400 shrink-0">@{rootTweet.author.userName}</span>
+                  <span className="text-xs text-gray-300 shrink-0">·</span>
+                  <span className="text-xs text-gray-400 shrink-0">{formatRelativeTime(rootTweet.createdAt)}</span>
+                </div>
+                <p className="mt-1 text-sm text-gray-800 whitespace-pre-wrap break-words">
+                  {smartCase(rootTweet.text)}
+                </p>
+                {rootTweet.textZh && (
+                  <p className="mt-1 text-sm text-gray-500 whitespace-pre-wrap break-words">
+                    {rootTweet.textZh}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* 评论列表 */}
+          <div className="divide-y divide-gray-100">
+            {comments.map((c) => (
+              <div key={c.id} className="px-4 py-3 text-sm">
+                <div className="flex gap-3">
+                  <div className="shrink-0">
+                    {c.author.profilePicture ? (
+                      <Image
+                        src={c.author.profilePicture}
+                        alt={c.author.name}
+                        width={32}
+                        height={32}
+                        className="w-8 h-8 rounded-full object-cover"
+                        unoptimized
+                      />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 text-xs font-bold">
+                        {c.author.name?.[0] ?? "?"}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-baseline gap-1.5 flex-wrap">
+                      <span className="font-medium text-gray-900 truncate">{c.author.name}</span>
+                      <span className="text-xs text-gray-400 shrink-0">@{c.author.userName}</span>
+                      <span className="text-xs text-gray-300 shrink-0">·</span>
+                      <span className="text-xs text-gray-400 shrink-0">{formatRelativeTime(c.createdAt)}</span>
+                    </div>
+                    <p className="mt-1 text-gray-800 whitespace-pre-wrap break-words">
+                      {smartCase(c.text)}
+                    </p>
+                    {c.textZh && (
+                      <p className="mt-1 text-gray-500 whitespace-pre-wrap break-words">
+                        {c.textZh}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {!loading && comments.length === 0 && !error && (
+              <div className="px-4 py-8 text-center text-xs text-gray-400">
+                暂无评论
+              </div>
+            )}
+            {error && (
+              <div className="px-4 py-3 text-xs text-red-600 flex items-center justify-between bg-red-50 border-t border-red-100">
+                <span>{error}</span>
+                <button
+                  type="button"
+                  className="text-[11px] text-red-600 underline-offset-2 hover:underline"
+                  onClick={onLoadMore}
+                >
+                  重试
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {hasMore && !error && (
+          <div className="border-t border-gray-100 px-4 py-2.5">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={loading}
+              className="w-full justify-center gap-2"
+              onClick={onLoadMore}
+            >
+              {loading ? (
+                <>
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  加载中...
+                </>
+              ) : (
+                <>
+                  <ChevronDown className="h-3.5 w-3.5" />
+                  加载更多评论
+                </>
+              )}
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
