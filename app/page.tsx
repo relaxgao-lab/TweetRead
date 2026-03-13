@@ -1128,8 +1128,6 @@ export default function HomePage() {
     setLeftView("detail")
     setSelectedTweet(tweet)
     void loadComments(tweet)
-    if (isMobile) setSheetState("half")
-    else if (!effectiveChatOpen) setIsChatOpen(true)
   }
 
   const handleBackToFeed = () => {
