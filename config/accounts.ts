@@ -14,6 +14,12 @@ export const ACCOUNTS: TwitterAccount[] = [
     aiContext: "This is a financial market news account that posts rapid-fire market headlines, economic data releases, and breaking financial news.",
   },
   {
+    userName: "Polymarket",
+    displayName: "Polymarket",
+    description: "Prediction markets on elections, crypto, and world events.",
+    aiContext: "This is the official Polymarket account for prediction markets. It posts about market odds, event outcomes, election predictions, crypto prices, and other forecastable events. Content is often data-driven with implied probabilities.",
+  },
+  {
     userName: "aleabitoreddit",
     displayName: "Aleabit On Reddit",
     description: "Reddit-style commentary and curation on markets and tech news.",
@@ -25,6 +31,7 @@ export const ACCOUNTS: TwitterAccount[] = [
     description: "Chinese-language insights on global markets and macro trends.",
     aiContext: "This account posts Chinese-language takes on global financial markets, macro trends, and important policy or economic events, often mixing English tickers with Chinese commentary.",
   },
+ 
   // 添加更多账号：
   // {
   //   userName: "elonmusk",
