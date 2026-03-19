@@ -7,6 +7,10 @@ import { SelectionActionMenu } from "@/components/selection-action-menu"
 import { ACCOUNTS } from "@/config/accounts"
 import type { Tweet } from "@/lib/twitter"
 import { formatRelativeTime, formatCount } from "@/lib/twitter"
+import {
+  accumulateCommentsForTweet,
+  buildCommentAnalysisPrompt,
+} from "@/lib/comment-analysis-client"
 import { Heart, Repeat2, MessageCircle, Eye, RefreshCw, ChevronDown, ChevronLeft, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { whisperSpeechService, type SpeechStatus } from "@/app/conversation/whisper-speech-service"
@@ -257,6 +261,7 @@ export default function HomePage() {
   const [commentsCursor, setCommentsCursor] = useState<string | undefined>(undefined)
   const [commentsLoading, setCommentsLoading] = useState(false)
   const [commentsError, setCommentsError] = useState<string | null>(null)
+  const [commentAnalysisPrefetching, setCommentAnalysisPrefetching] = useState(false)
 
   // ── AI 面板：宽度 + 开关 ──
   const [chatWidth, setChatWidth] = useState(DEFAULT_CHAT_WIDTH)
@@ -871,7 +876,13 @@ export default function HomePage() {
   // ── 发送消息（SSE 流式）──
   const sendMessage = useCallback(async (
     text: string,
-    options?: { tweetOverride?: Tweet; includeQuotedSelection?: boolean; displayContent?: string; quotedSelectionOverride?: QuotedSelectionState },
+    options?: {
+      tweetOverride?: Tweet
+      includeQuotedSelection?: boolean
+      displayContent?: string
+      quotedSelectionOverride?: QuotedSelectionState
+      maxTokens?: number
+    },
   ) => {
     const targetTweet = options?.tweetOverride ?? selectedTweet
     if (!text.trim() || isChatLoading || !targetTweet) return
@@ -912,6 +923,7 @@ export default function HomePage() {
         body: JSON.stringify({
           messages: [...baseMessages, { role: "user", content: requestText }],
           sceneMeta: buildSceneMeta(targetTweet),
+          ...(options?.maxTokens != null ? { maxTokens: options.maxTokens } : {}),
         }),
       })
       if (!res.ok) throw new Error(`Chat API ${res.status}`)
@@ -954,7 +966,160 @@ export default function HomePage() {
     finally { setIsChatLoading(false) }
   }, [isChatLoading, selectedTweet, messages, quotedSelection, isMobile, sheetState])
 
-  const handleSubmit = (e: React.FormEvent) => { e.preventDefault(); sendMessage(inputText) }
+  const streamAssistantReply = useCallback(
+    async (
+      apiMessages: { role: "user" | "assistant"; content: string }[],
+      tweet: Tweet,
+      maxTokens?: number,
+    ) => {
+      setIsChatLoading(true)
+      setSpeechError(null)
+      let accumulated = ""
+      let firstChunk = true
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: apiMessages,
+            sceneMeta: buildSceneMeta(tweet),
+            ...(maxTokens != null ? { maxTokens } : {}),
+          }),
+        })
+        if (!res.ok) throw new Error(`Chat API ${res.status}`)
+        if (!res.body) throw new Error("No response body")
+
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ""
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split("\n")
+          buffer = lines.pop() ?? ""
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue
+            const raw = line.slice(6).trim()
+            if (raw === "[DONE]") continue
+            try {
+              const { delta } = JSON.parse(raw)
+              if (delta) {
+                accumulated += delta
+                if (firstChunk) {
+                  firstChunk = false
+                  setIsChatLoading(false)
+                  setMessages((prev) => [...prev, { role: "assistant", content: accumulated }])
+                } else {
+                  setMessages((prev) => {
+                    const copy = [...prev]
+                    copy[copy.length - 1] = { role: "assistant", content: accumulated }
+                    return copy
+                  })
+                }
+              }
+            } catch {}
+          }
+        }
+      } catch {
+        setSpeechError("对话请求失败，请稍后重试")
+      } finally {
+        setIsChatLoading(false)
+      }
+    },
+    [],
+  )
+
+  const handleCommentAnalysis = useCallback(async () => {
+    if (!selectedTweet) return
+    if (
+      isChatLoading ||
+      commentAnalysisPrefetching ||
+      speechStatus === "recording" ||
+      speechStatus === "processing"
+    )
+      return
+
+    const tweet = selectedTweet
+    const tweetId = tweet.id
+    const tweetMatches = commentsForTweet?.id === tweetId
+    const needFetch = !(tweetMatches && !commentsHasMore)
+    const baseHistory = messages
+
+    const shortUser: AiMessage = { role: "user", content: "评论分析", displayContent: "评论分析" }
+    setQuotedSelection(null)
+    if (isMobile && sheetState === "hidden") setSheetState("half")
+    setMessages([...baseHistory, shortUser])
+    if (needFetch) setCommentAnalysisPrefetching(true)
+
+    const toApi = (list: AiMessage[]) =>
+      list.map((m) => ({ role: m.role, content: m.content }))
+
+    try {
+      let finalList: Tweet[]
+      let hitCap = false
+
+      if (!needFetch) {
+        finalList = comments
+        await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+      } else {
+        setCommentsError(null)
+        setCommentsLoading(true)
+        try {
+          const result = await accumulateCommentsForTweet(tweetId, {
+            existing: tweetMatches ? comments : [],
+            cursor: tweetMatches ? commentsCursor : undefined,
+            hasMore: tweetMatches ? commentsHasMore : true,
+            tweetMatches,
+          })
+          finalList = result.comments
+          hitCap = result.hitCap
+          setCommentsForTweet(tweet)
+          setComments(result.comments)
+          setCommentsHasMore(result.hasMore)
+          setCommentsCursor(result.nextCursor)
+        } finally {
+          setCommentsLoading(false)
+        }
+      }
+
+      const fullPrompt = buildCommentAnalysisPrompt(tweet, finalList, { hitCap })
+      const fullUser: AiMessage = {
+        role: "user",
+        content: fullPrompt,
+        displayContent: "评论分析",
+      }
+      setMessages([...baseHistory, fullUser])
+      setCommentAnalysisPrefetching(false)
+
+      const apiMessages = [...toApi(baseHistory), { role: "user" as const, content: fullPrompt }]
+      await streamAssistantReply(apiMessages, tweet, 1800)
+    } catch (e) {
+      setCommentAnalysisPrefetching(false)
+      setMessages(baseHistory)
+      setSpeechError(e instanceof Error ? e.message : "加载评论失败")
+    }
+  }, [
+    selectedTweet,
+    isChatLoading,
+    commentAnalysisPrefetching,
+    speechStatus,
+    commentsForTweet,
+    comments,
+    commentsHasMore,
+    commentsCursor,
+    messages,
+    isMobile,
+    sheetState,
+    streamAssistantReply,
+  ])
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (commentAnalysisPrefetching) return
+    sendMessage(inputText)
+  }
 
   const handleVoiceToggle = async () => {
     if (speechStatus === "recording") { whisperSpeechService.stopListening(); setSpeechStatus("idle"); return }
@@ -966,7 +1131,14 @@ export default function HomePage() {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
-      if (inputText.trim() && !isChatLoading && speechStatus !== "recording" && speechStatus !== "processing") sendMessage(inputText)
+      if (
+        inputText.trim() &&
+        !isChatLoading &&
+        !commentAnalysisPrefetching &&
+        speechStatus !== "recording" &&
+        speechStatus !== "processing"
+      )
+        sendMessage(inputText)
     }
   }
 
@@ -1114,11 +1286,9 @@ export default function HomePage() {
 
   // 选中推文 + 打开 AI（推文分析按钮专用）
   const handleOpenAI = (tweet: Tweet) => {
-    if (selectedTweet?.id !== tweet.id) {
-      setSelectedTweet(tweet)
-      setMessages([])
-      setQuotedSelection(null)
-    }
+    setSelectedTweet(tweet)
+    setMessages([])
+    setQuotedSelection(null)
     if (isMobile) setSheetState("half")
     else if (!effectiveChatOpen) setIsChatOpen(true)
   }
@@ -1127,6 +1297,8 @@ export default function HomePage() {
     setDetailTweet(tweet)
     setLeftView("detail")
     setSelectedTweet(tweet)
+    setMessages([])
+    setQuotedSelection(null)
     void loadComments(tweet)
   }
 
@@ -1336,6 +1508,9 @@ export default function HomePage() {
               speechError={speechError}
               onClose={() => setIsChatOpen(false)}
               onSendPreset={(text) => sendMessage(text, { includeQuotedSelection: false })}
+              onCommentAnalysis={() => void handleCommentAnalysis()}
+              commentsLoading={commentsLoading}
+              commentAnalysisPrefetching={commentAnalysisPrefetching}
               onInputChange={(value) => setInputText(value)}
               onAssistantTextSelect={handleAssistantTextSelect}
               onClearQuotedSelection={() => setQuotedSelection(null)}
@@ -1381,6 +1556,9 @@ export default function HomePage() {
               onClose={() => setSheetState(sheetState === "full" ? "half" : "hidden")}
               onExpand={() => setSheetState("full")}
               onSendPreset={(text) => sendMessage(text, { includeQuotedSelection: false })}
+              onCommentAnalysis={() => void handleCommentAnalysis()}
+              commentsLoading={commentsLoading}
+              commentAnalysisPrefetching={commentAnalysisPrefetching}
               onInputChange={(value) => setInputText(value)}
               onAssistantTextSelect={handleAssistantTextSelect}
               onClearQuotedSelection={() => setQuotedSelection(null)}

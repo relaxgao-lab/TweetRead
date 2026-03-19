@@ -37,6 +37,7 @@ export default async function TweetDetailPage({ params }: PageProps) {
 
   return (
     <TweetDetailShell
+      key={rootTweet.id}
       rootTweet={rootTweet}
       initialComments={initialComments}
       initialCommentsHasMore={initialCommentsHasMore}

@@ -9,7 +9,12 @@ interface Message {
 
 export async function POST(request: Request) {
   try {
-    const { messages, sceneMeta } = await request.json()
+    const body = await request.json()
+    const { messages, sceneMeta, maxTokens: rawMax } = body as {
+      messages?: unknown
+      sceneMeta?: { aiRole?: string; context?: string }
+      maxTokens?: number
+    }
 
     if (!sceneMeta?.aiRole || !sceneMeta?.context) {
       return new Response(JSON.stringify({ error: "Missing sceneMeta" }), { status: 400 })
@@ -26,19 +31,25 @@ Guidelines:
 3. If asked to translate, translate accurately and naturally into Chinese.
 4. If asked to summarize, highlight the key points.
 5. Always stay focused on the tweet content provided.
-6. Wrap your spoken reply in [SPEAK]...[/SPEAK] for TTS.
-7. Respond in Chinese unless the user explicitly asks for English.`
+6. If the user pastes a list of replies under the tweet, synthesize main viewpoints and themes; do not quote every reply in full.
+7. Wrap your spoken reply in [SPEAK]...[/SPEAK] for TTS.
+8. Respond in Chinese unless the user explicitly asks for English.`
 
     const fullMessages: Message[] = [
       { role: "system", content: systemPrompt },
       ...(Array.isArray(messages) ? messages.filter((m: Message) => m.role !== "system") : []),
     ]
 
+    const maxOut =
+      typeof rawMax === "number" && Number.isFinite(rawMax)
+        ? Math.min(Math.max(1, Math.floor(rawMax)), 4000)
+        : 600
+
     const stream = await openai.chat.completions.create({
       model: "gpt-4.1-mini-2025-04-14",
       messages: fullMessages,
       temperature: 0.6,
-      max_tokens: 600,
+      max_tokens: maxOut,
       stream: true,
     })
 

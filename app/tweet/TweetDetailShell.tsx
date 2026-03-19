@@ -7,6 +7,10 @@ import { ChevronDown, RefreshCw, Sparkles } from "lucide-react"
 
 import type { Tweet } from "@/lib/twitter"
 import { formatRelativeTime, formatCount } from "@/lib/twitter"
+import {
+  accumulateCommentsForTweet,
+  buildCommentAnalysisPrompt,
+} from "@/lib/comment-analysis-client"
 import { AiPanel, type AiMessage } from "@/components/ai-panel"
 import { whisperSpeechService, type SpeechStatus } from "@/app/conversation/whisper-speech-service"
 import { Button } from "@/components/ui/button"
@@ -30,6 +34,15 @@ function extractSpeakContent(content: string): string {
   const m = content.match(/\[\s*SPEAK\s*\]([\s\S]*?)\[\s*\/\s*SPEAK\s*\]/i)
   if (m) return m[1].trim()
   return content.replace(/\[\s*\/?\s*SPEAK\s*\]/gi, "").trim() || content
+}
+
+function detailSceneMeta(tweet: Tweet) {
+  return {
+    aiRole: "a professional tweet analyst and financial/tech news interpreter",
+    userRole: "reader",
+    context: `Tweet by @${tweet.author.userName} (${tweet.author.name}) — ${tweet.createdAt}:\n"${tweet.text}"\n\nEngagement: ${tweet.likeCount} likes, ${tweet.retweetCount} retweets, ${tweet.replyCount} replies, ${tweet.viewCount} views.`,
+    scenario: tweet.text,
+  }
 }
 
 export function TweetDetailShell({
@@ -57,6 +70,7 @@ export function TweetDetailShell({
   const [commentsCursor, setCommentsCursor] = useState<string | undefined>(initialCommentsCursor)
   const [commentsLoading, setCommentsLoading] = useState(false)
   const [commentsError, setCommentsError] = useState<string | null>(null)
+  const [commentAnalysisPrefetching, setCommentAnalysisPrefetching] = useState(false)
 
   // 响应式
   useEffect(() => {
@@ -87,12 +101,16 @@ export function TweetDetailShell({
   }, [messages])
 
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, options?: { maxTokens?: number; displayContent?: string }) => {
       const tweet = selectedTweet
       if (!tweet || !text.trim() || isChatLoading) return
 
       const trimmed = text.trim()
-      const userMsg: AiMessage = { role: "user", content: trimmed }
+      const userMsg: AiMessage = {
+        role: "user",
+        content: trimmed,
+        ...(options?.displayContent ? { displayContent: options.displayContent } : {}),
+      }
       const baseMessages = messages
 
       setMessages([...baseMessages, userMsg])
@@ -108,12 +126,8 @@ export function TweetDetailShell({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             messages: [...baseMessages, { role: "user", content: trimmed }],
-            sceneMeta: {
-              aiRole: "a professional tweet analyst and financial/tech news interpreter",
-              userRole: "reader",
-              context: `Tweet by @${tweet.author.userName} (${tweet.author.name}) — ${tweet.createdAt}:\n"${tweet.text}"\n\nEngagement: ${tweet.likeCount} likes, ${tweet.retweetCount} retweets, ${tweet.replyCount} replies, ${tweet.viewCount} views.`,
-              scenario: tweet.text,
-            },
+            sceneMeta: detailSceneMeta(tweet),
+            ...(options?.maxTokens != null ? { maxTokens: options.maxTokens } : {}),
           }),
         })
         if (!res.ok || !res.body) throw new Error("Chat API error")
@@ -162,15 +176,165 @@ export function TweetDetailShell({
     [isChatLoading, messages, selectedTweet],
   )
 
+  const streamAssistantReply = useCallback(
+    async (
+      apiMessages: { role: "user" | "assistant"; content: string }[],
+      tweet: Tweet,
+      maxTokens?: number,
+    ) => {
+      setIsChatLoading(true)
+      setSpeechError(null)
+      let accumulated = ""
+      let firstChunk = true
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: apiMessages,
+            sceneMeta: detailSceneMeta(tweet),
+            ...(maxTokens != null ? { maxTokens } : {}),
+          }),
+        })
+        if (!res.ok || !res.body) throw new Error("Chat API error")
+
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ""
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split("\n")
+          buffer = lines.pop() ?? ""
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue
+            const raw = line.slice(6).trim()
+            if (raw === "[DONE]") continue
+            try {
+              const { delta } = JSON.parse(raw)
+              if (delta) {
+                accumulated += delta
+                if (firstChunk) {
+                  firstChunk = false
+                  setIsChatLoading(false)
+                  setMessages((prev) => [...prev, { role: "assistant", content: accumulated }])
+                } else {
+                  setMessages((prev) => {
+                    const copy = [...prev]
+                    copy[copy.length - 1] = { role: "assistant", content: accumulated }
+                    return copy
+                  })
+                }
+              }
+            } catch {
+              // ignore parse error
+            }
+          }
+        }
+      } catch {
+        setSpeechError("对话请求失败，请稍后重试")
+      } finally {
+        setIsChatLoading(false)
+      }
+    },
+    [],
+  )
+
+  const handleCommentAnalysis = useCallback(async () => {
+    if (!selectedTweet) return
+    if (
+      isChatLoading ||
+      commentAnalysisPrefetching ||
+      speechStatus === "recording" ||
+      speechStatus === "processing"
+    )
+      return
+
+    const tweet = rootTweet
+    const needFetch = commentsHasMore
+    const baseHistory = messages
+
+    const shortUser: AiMessage = { role: "user", content: "评论分析", displayContent: "评论分析" }
+    setMessages([...baseHistory, shortUser])
+    if (needFetch) setCommentAnalysisPrefetching(true)
+
+    const toApi = (list: AiMessage[]) =>
+      list.map((m) => ({ role: m.role, content: m.content }))
+
+    try {
+      let finalList: Tweet[]
+      let hitCap = false
+
+      if (!needFetch) {
+        finalList = comments
+        await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+      } else {
+        setCommentsError(null)
+        setCommentsLoading(true)
+        try {
+          const result = await accumulateCommentsForTweet(rootTweet.id, {
+            existing: comments,
+            cursor: commentsCursor,
+            hasMore: commentsHasMore,
+            tweetMatches: true,
+          })
+          finalList = result.comments
+          hitCap = result.hitCap
+          setComments(result.comments)
+          setCommentsHasMore(result.hasMore)
+          setCommentsCursor(result.nextCursor)
+        } finally {
+          setCommentsLoading(false)
+        }
+      }
+
+      const fullPrompt = buildCommentAnalysisPrompt(tweet, finalList, { hitCap })
+      const fullUser: AiMessage = {
+        role: "user",
+        content: fullPrompt,
+        displayContent: "评论分析",
+      }
+      setMessages([...baseHistory, fullUser])
+      setCommentAnalysisPrefetching(false)
+
+      const apiMessages = [...toApi(baseHistory), { role: "user" as const, content: fullPrompt }]
+      await streamAssistantReply(apiMessages, tweet, 1800)
+    } catch (e) {
+      setCommentAnalysisPrefetching(false)
+      setMessages(baseHistory)
+      setSpeechError(e instanceof Error ? e.message : "加载评论失败")
+    }
+  }, [
+    selectedTweet,
+    isChatLoading,
+    commentAnalysisPrefetching,
+    speechStatus,
+    comments,
+    commentsHasMore,
+    commentsCursor,
+    rootTweet,
+    messages,
+    streamAssistantReply,
+  ])
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    if (commentAnalysisPrefetching) return
     void sendMessage(inputText)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
-      if (inputText.trim() && !isChatLoading && speechStatus !== "recording" && speechStatus !== "processing") {
+      if (
+        inputText.trim() &&
+        !isChatLoading &&
+        !commentAnalysisPrefetching &&
+        speechStatus !== "recording" &&
+        speechStatus !== "processing"
+      ) {
         void sendMessage(inputText)
       }
     }
@@ -376,6 +540,9 @@ export function TweetDetailShell({
             speechError={speechError}
             onClose={() => {}}
             onSendPreset={(text) => void sendMessage(text)}
+            onCommentAnalysis={() => void handleCommentAnalysis()}
+            commentsLoading={commentsLoading}
+            commentAnalysisPrefetching={commentAnalysisPrefetching}
             onInputChange={(value) => setInputText(value)}
             onAssistantTextSelect={() => {}}
             onClearQuotedSelection={() => {}}
@@ -437,6 +604,9 @@ export function TweetDetailShell({
               }}
               onExpand={() => {}}
               onSendPreset={(text) => void sendMessage(text)}
+              onCommentAnalysis={() => void handleCommentAnalysis()}
+              commentsLoading={commentsLoading}
+              commentAnalysisPrefetching={commentAnalysisPrefetching}
               onInputChange={(value) => setInputText(value)}
               onAssistantTextSelect={() => {}}
               onClearQuotedSelection={() => {}}

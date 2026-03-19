@@ -63,6 +63,12 @@ type AiPanelProps = {
   onHandleTouchMove?: React.TouchEventHandler<HTMLDivElement>
   onHandleTouchEnd?: React.TouchEventHandler<HTMLDivElement>
   onExpand?: () => void
+  /** 评论归纳：由父组件拉全评论后发起对话；未传入则不显示按钮 */
+  onCommentAnalysis?: () => void
+  /** 正在拉取评论（含评论分析触发的分页） */
+  commentsLoading?: boolean
+  /** 评论分析：已展示用户气泡，正在拉取/整理评论数据 */
+  commentAnalysisPrefetching?: boolean
 }
 
 const PRESET_PROMPTS = [
@@ -84,6 +90,13 @@ const voiceColor = {
   border: "border-emerald-200",
   text: "text-emerald-700",
   hover: "hover:bg-emerald-200/60",
+}
+
+const commentAnalysisColor = {
+  bg: "bg-sky-100",
+  border: "border-sky-200",
+  text: "text-sky-800",
+  hover: "hover:bg-sky-200/60",
 }
 
 function LoadingDots() {
@@ -177,6 +190,7 @@ function MessageList({
   selectedTweet,
   messages,
   isChatLoading,
+  commentAnalysisPrefetching,
   speechStatus,
   formatTweetText,
   renderAssistantContent,
@@ -187,6 +201,7 @@ function MessageList({
   selectedTweet: Tweet | null
   messages: AiMessage[]
   isChatLoading: boolean
+  commentAnalysisPrefetching?: boolean
   speechStatus: SpeechStatus
   formatTweetText: (text: string) => string
   renderAssistantContent: (content: string) => string
@@ -309,6 +324,21 @@ function MessageList({
         </div>
       ))}
 
+      {commentAnalysisPrefetching && !isChatLoading && (
+        <div className="flex gap-3" aria-busy="true" aria-live="polite">
+          <div className="flex-1 min-w-0">
+            <div className="inline-flex items-center gap-2.5 rounded-2xl bg-gray-50 border border-gray-100 px-4 py-2 text-base text-gray-600">
+              <span
+                className="h-2 w-2 shrink-0 rounded-full bg-emerald-500/90 animate-pulse motion-reduce:animate-none"
+                aria-hidden
+              />
+              <span>正在进行数据分析</span>
+              <LoadingDots />
+            </div>
+          </div>
+        </div>
+      )}
+
       {isChatLoading && (
         <div className="flex gap-3">
           <div className="flex-1 min-w-0">
@@ -328,14 +358,28 @@ function PresetPromptBar({
   selectedTweet,
   isChatLoading,
   speechStatus,
+  commentsLoading,
   onSendPreset,
+  onCommentAnalysis,
+  commentAnalysisPrefetching,
 }: {
   selectedTweet: Tweet | null
   isChatLoading: boolean
   speechStatus: SpeechStatus
+  commentsLoading?: boolean
+  commentAnalysisPrefetching?: boolean
   onSendPreset: (text: string) => void
+  onCommentAnalysis?: () => void
 }) {
   if (!selectedTweet) return null
+
+  const presetDisabled =
+    isChatLoading ||
+    speechStatus === "recording" ||
+    speechStatus === "processing" ||
+    Boolean(commentsLoading) ||
+    Boolean(commentAnalysisPrefetching)
+  const ac = commentAnalysisColor
 
   return (
     <div className="shrink-0 px-4 py-2 border-t border-gray-100 bg-gray-50/80">
@@ -348,7 +392,7 @@ function PresetPromptBar({
               type="button"
               variant="outline"
               size="sm"
-              disabled={isChatLoading || speechStatus === "recording" || speechStatus === "processing"}
+              disabled={presetDisabled}
               onClick={() => onSendPreset(prompt.text)}
               className={`text-sm h-9 px-4 rounded-xl border ${c.bg} ${c.border} ${c.text} ${c.hover} disabled:opacity-50 transition-all`}
             >
@@ -356,6 +400,18 @@ function PresetPromptBar({
             </Button>
           )
         })}
+        {onCommentAnalysis && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={presetDisabled}
+            onClick={() => onCommentAnalysis()}
+            className={`text-sm h-9 px-4 rounded-xl border ${ac.bg} ${ac.border} ${ac.text} ${ac.hover} disabled:opacity-50 transition-all`}
+          >
+            评论分析
+          </Button>
+        )}
       </div>
     </div>
   )
@@ -367,6 +423,7 @@ function ChatInput({
   inputText,
   quotedSelection,
   isChatLoading,
+  commentAnalysisPrefetching,
   speechStatus,
   speechError,
   onDismissSpeechError,
@@ -382,6 +439,7 @@ function ChatInput({
   inputText: string
   quotedSelection: QuotedSelection | null
   isChatLoading: boolean
+  commentAnalysisPrefetching?: boolean
   speechStatus: SpeechStatus
   speechError: string | null
   onDismissSpeechError: () => void
@@ -392,6 +450,7 @@ function ChatInput({
   onVoiceToggle: () => void
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
 }) {
+  const inputBusy = isChatLoading || Boolean(commentAnalysisPrefetching)
   return (
     <div className={`shrink-0 border-t border-gray-200 ${variant === "desktop" ? "p-4" : "p-3"} bg-gray-50/80`}>
       {speechError && (
@@ -434,7 +493,7 @@ function ChatInput({
             placeholder={selectedTweet
               ? (variant === "desktop" ? "输入或语音...（Shift+Enter 换行）" : "输入或语音...")
               : (variant === "desktop" ? "请先点击左侧推文..." : "请先点击推文...")}
-            disabled={isChatLoading || !selectedTweet || speechStatus === "processing"}
+            disabled={inputBusy || !selectedTweet || speechStatus === "processing"}
             className="block w-full min-h-[44px] max-h-[120px] text-base resize-none pt-2.5 px-3 border-0 focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent placeholder:text-gray-400"
             rows={1}
           />
@@ -444,7 +503,7 @@ function ChatInput({
               size="icon"
               variant="ghost"
               onClick={onVoiceToggle}
-              disabled={isChatLoading || !selectedTweet || speechStatus === "processing"}
+              disabled={inputBusy || !selectedTweet || speechStatus === "processing"}
               className="h-8 w-8 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-md disabled:opacity-50 transition-colors"
               title={speechStatus === "recording" ? "停止录音" : "语音输入"}
             >
@@ -455,7 +514,7 @@ function ChatInput({
             <Button
               type="submit"
               size="icon"
-              disabled={!inputText.trim() || isChatLoading || !selectedTweet}
+              disabled={!inputText.trim() || inputBusy || !selectedTweet}
               className="h-8 w-8 bg-emerald-600 hover:bg-emerald-700 rounded-md disabled:opacity-50 transition-colors shadow-sm"
             >
               <Send className="h-4 w-4" />
@@ -492,6 +551,9 @@ function PanelBody(props: AiPanelProps) {
     renderAssistantContent,
     sheetState,
     onExpand,
+    onCommentAnalysis,
+    commentsLoading,
+    commentAnalysisPrefetching,
   } = props
 
   return (
@@ -543,6 +605,7 @@ function PanelBody(props: AiPanelProps) {
         selectedTweet={selectedTweet}
         messages={messages}
         isChatLoading={isChatLoading}
+        commentAnalysisPrefetching={commentAnalysisPrefetching}
         speechStatus={speechStatus}
         formatTweetText={formatTweetText}
         renderAssistantContent={renderAssistantContent}
@@ -581,7 +644,10 @@ function PanelBody(props: AiPanelProps) {
         selectedTweet={selectedTweet}
         isChatLoading={isChatLoading}
         speechStatus={speechStatus}
+        commentsLoading={commentsLoading}
+        commentAnalysisPrefetching={commentAnalysisPrefetching}
         onSendPreset={onSendPreset}
+        onCommentAnalysis={onCommentAnalysis}
       />
 
       <ChatInput
@@ -590,6 +656,7 @@ function PanelBody(props: AiPanelProps) {
         inputText={inputText}
         quotedSelection={quotedSelection}
         isChatLoading={isChatLoading}
+        commentAnalysisPrefetching={commentAnalysisPrefetching}
         speechStatus={speechStatus}
         speechError={speechError}
         onDismissSpeechError={onDismissSpeechError}
