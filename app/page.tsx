@@ -1469,7 +1469,7 @@ function DetailView({
     if (!onTextSelect) return
     const sel = window.getSelection()
     const text = sel?.toString().trim()
-    if (!text || text.length > 200) return
+    if (!text || text.length > 800) return
     try {
       const range = sel!.getRangeAt(0)
       const rect = range.getBoundingClientRect()
@@ -1680,7 +1680,7 @@ function TweetCard({
     if (!onTextSelect) return
     const sel = window.getSelection()
     const text = sel?.toString().trim()
-    if (!text || text.length > 200) return
+    if (!text || text.length > 800) return
     try {
       const range = sel!.getRangeAt(0)
       const rect = range.getBoundingClientRect()
