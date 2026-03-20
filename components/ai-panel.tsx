@@ -382,36 +382,42 @@ function PresetPromptBar({
   const ac = commentAnalysisColor
 
   return (
-    <div className="shrink-0 px-4 py-2 border-t border-gray-100 bg-gray-50/80">
-      <div className="flex flex-wrap gap-x-3 gap-y-2 pt-1">
-        {PRESET_PROMPTS.map((prompt, i) => {
-          const c = pastelColors[i % pastelColors.length]
-          return (
+    <div className="shrink-0 border-t border-gray-100 bg-gray-50/80 py-2">
+      <div
+        className="overflow-x-auto overscroll-x-contain px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden touch-pan-x"
+        role="toolbar"
+        aria-label="快捷提问"
+      >
+        <div className="flex w-max min-w-full flex-nowrap items-center gap-3 pt-1 pb-0.5">
+          {PRESET_PROMPTS.map((prompt, i) => {
+            const c = pastelColors[i % pastelColors.length]
+            return (
+              <Button
+                key={prompt.label}
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={presetDisabled}
+                onClick={() => onSendPreset(prompt.text)}
+                className={`shrink-0 text-sm h-9 px-4 rounded-xl border ${c.bg} ${c.border} ${c.text} ${c.hover} disabled:opacity-50 transition-all`}
+              >
+                {prompt.label}
+              </Button>
+            )
+          })}
+          {onCommentAnalysis && (
             <Button
-              key={prompt.label}
               type="button"
               variant="outline"
               size="sm"
               disabled={presetDisabled}
-              onClick={() => onSendPreset(prompt.text)}
-              className={`text-sm h-9 px-4 rounded-xl border ${c.bg} ${c.border} ${c.text} ${c.hover} disabled:opacity-50 transition-all`}
+              onClick={() => onCommentAnalysis()}
+              className={`shrink-0 text-sm h-9 px-4 rounded-xl border ${ac.bg} ${ac.border} ${ac.text} ${ac.hover} disabled:opacity-50 transition-all`}
             >
-              {prompt.label}
+              评论分析
             </Button>
-          )
-        })}
-        {onCommentAnalysis && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={presetDisabled}
-            onClick={() => onCommentAnalysis()}
-            className={`text-sm h-9 px-4 rounded-xl border ${ac.bg} ${ac.border} ${ac.text} ${ac.hover} disabled:opacity-50 transition-all`}
-          >
-            评论分析
-          </Button>
-        )}
+          )}
+        </div>
       </div>
     </div>
   )
