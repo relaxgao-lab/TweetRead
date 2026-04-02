@@ -91,12 +91,12 @@ function parseTweet(raw: unknown): Tweet {
 
 export async function fetchUserTweets(userName: string, cursor?: string, forceRefresh?: boolean): Promise<TweetsResponse> {
   const apiKey = getApiKey()
-  const params = new URLSearchParams({ q: `from:${userName}`, product: "Latest" })
+  const params = new URLSearchParams({ userName })
   if (cursor) params.set("cursor", cursor)
 
-  const res = await fetch(`${GETXAPI_BASE}/twitter/tweet/advanced_search?${params}`, {
+  const res = await fetch(`${GETXAPI_BASE}/twitter/user/tweets?${params}`, {
     headers: { Authorization: `Bearer ${apiKey}` },
-    ...(forceRefresh ? { cache: "no-store" as RequestCache } : { next: { revalidate: 300 } }), // 刷新时跳过缓存，否则 5 分钟缓存
+    ...(forceRefresh || cursor ? { cache: "no-store" as RequestCache } : { next: { revalidate: 300 } }), // 刷新或分页时跳过缓存，否则 5 分钟缓存
   })
 
   if (!res.ok) {
