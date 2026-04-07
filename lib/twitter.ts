@@ -139,6 +139,32 @@ export async function fetchTweetConversation(tweetId: string, cursor?: string): 
   }
 }
 
+export async function searchUserTweets(userName: string, query: string, cursor?: string): Promise<TweetsResponse> {
+  const apiKey = getApiKey()
+  const q = `from:${userName} ${query}`
+  const params = new URLSearchParams({ q, product: "Latest" })
+  if (cursor) params.set("cursor", cursor)
+
+  const res = await fetch(`${GETXAPI_BASE}/twitter/tweet/advanced_search?${params}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    cache: "no-store",
+  })
+
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`GetXAPI search error ${res.status}: ${err}`)
+  }
+
+  const data = asRecord(await res.json())
+  const rawTweets = Array.isArray(data.tweets) ? data.tweets : []
+
+  return {
+    tweets: rawTweets.map(parseTweet),
+    hasMore: (data.has_more as boolean | undefined) ?? false,
+    nextCursor: (data.next_cursor as string | undefined) ?? undefined,
+  }
+}
+
 export async function fetchTweetById(id: string): Promise<Tweet | null> {
   const apiKey = getApiKey()
   const res = await fetch(`${GETXAPI_BASE}/twitter/tweet/detail?id=${id}`, {

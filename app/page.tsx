@@ -11,7 +11,7 @@ import {
   accumulateCommentsForTweet,
   buildCommentAnalysisPrompt,
 } from "@/lib/comment-analysis-client"
-import { Heart, Repeat2, MessageCircle, Eye, RefreshCw, ChevronDown, ChevronLeft, Sparkles } from "lucide-react"
+import { Heart, Repeat2, MessageCircle, Eye, RefreshCw, ChevronDown, ChevronLeft, Sparkles, Search, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { whisperSpeechService, type SpeechStatus } from "@/app/conversation/whisper-speech-service"
 
@@ -236,9 +236,21 @@ export default function HomePage() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // ── 账户内搜索 ──
+  const [searchQuery, setSearchQuery] = useState("")
+  const [activeSearch, setActiveSearch] = useState("")
+  const [searchCache, setSearchCache] = useState<Record<string, { tweets: Tweet[]; hasMore: boolean; nextCursor?: string }>>({})
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchLoadingMore, setSearchLoadingMore] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
+
   const activeAccount = ACCOUNTS.find((a) => a.userName === activeTab) ?? ACCOUNTS[0]
   const current = cache[activeTab]
-  const tweets = current?.tweets ?? []
+  const isSearchMode = activeSearch.trim().length > 0
+  const searchKey = `${activeTab}::${activeSearch}`
+  const currentSearch = searchCache[searchKey]
+  const displayTweets = isSearchMode ? (currentSearch?.tweets ?? []) : (current?.tweets ?? [])
+  const displayHasMore = isSearchMode ? (currentSearch?.hasMore ?? false) : (current?.hasMore ?? false)
 
   // ── AI 面板：选中推文 + 聊天 ──
   const [selectedTweet, setSelectedTweet] = useState<Tweet | null>(null)
@@ -722,18 +734,31 @@ export default function HomePage() {
   }, [fabRight, fabBottom, clampFabPosition])
 
   // ── 推文翻译（SSE 流式 + localStorage 缓存）──
-  const translateTweets = useCallback(async (userName: string, tweets: Tweet[]) => {
+  const translateTweets = useCallback(async (userName: string, tweets: Tweet[], searchCacheKey?: string) => {
     const transCache = loadTransCache()
     const needTranslate = tweets.filter((t) => !transCache[t.id])
 
+    const applyTranslations = (updates: Record<string, string>) => {
+      if (searchCacheKey) {
+        setSearchCache((prev) => {
+          const tab = prev[searchCacheKey]
+          if (!tab) return prev
+          const updated = tab.tweets.map((t) => updates[t.id] ? { ...t, textZh: updates[t.id] } : t)
+          return { ...prev, [searchCacheKey]: { ...tab, tweets: updated } }
+        })
+      } else {
+        setCache((prev) => {
+          const tab = prev[userName]
+          if (!tab) return prev
+          const updated = tab.tweets.map((t) => updates[t.id] ? { ...t, textZh: updates[t.id] } : t)
+          return { ...prev, [userName]: { ...tab, tweets: updated } }
+        })
+      }
+    }
+
     // 先把缓存命中的翻译立即填入
     if (Object.keys(transCache).length > 0) {
-      setCache((prev) => {
-        const tab = prev[userName]
-        if (!tab) return prev
-        const updated = tab.tweets.map((t) => transCache[t.id] ? { ...t, textZh: transCache[t.id] } : t)
-        return { ...prev, [userName]: { ...tab, tweets: updated } }
-      })
+      applyTranslations(transCache)
     }
 
     if (!needTranslate.length) return
@@ -765,12 +790,7 @@ export default function HomePage() {
           try {
             const { id, textZh } = JSON.parse(payload) as { id: string; textZh: string }
             newEntries[id] = textZh
-            setCache((prev) => {
-              const tab = prev[userName]
-              if (!tab) return prev
-              const updated = tab.tweets.map((t) => t.id === id ? { ...t, textZh } : t)
-              return { ...prev, [userName]: { ...tab, tweets: updated } }
-            })
+            applyTranslations({ [id]: textZh })
           } catch {}
         }
       }
@@ -814,6 +834,32 @@ export default function HomePage() {
         setLoading(false)
         setLoadingMore(false)
       }
+    }
+  }, [translateTweets])
+
+  // ── 账户内搜索 ──
+  const loadSearchResults = useCallback(async (userName: string, query: string, cursor?: string) => {
+    const isLoadMore = !!cursor
+    if (isLoadMore) setSearchLoadingMore(true); else setSearchLoading(true)
+    setSearchError(null)
+    const key = `${userName}::${query}`
+    try {
+      const params = new URLSearchParams({ userName, q: query })
+      if (cursor) params.set("cursor", cursor)
+      const res = await fetch(`/api/search?${params}`, { cache: "no-store" })
+      if (!res.ok) throw new Error(`Error ${res.status}`)
+      const data = await res.json()
+      const incoming: Tweet[] = data.tweets ?? []
+      setSearchCache((prev) => {
+        const existing = isLoadMore ? (prev[key]?.tweets ?? []) : []
+        return { ...prev, [key]: { tweets: [...existing, ...incoming], hasMore: data.hasMore, nextCursor: data.nextCursor } }
+      })
+      translateTweets(userName, incoming, key)
+    } catch (e) {
+      setSearchError(e instanceof Error ? e.message : "搜索失败")
+    } finally {
+      setSearchLoading(false)
+      setSearchLoadingMore(false)
     }
   }, [translateTweets])
 
@@ -1346,7 +1392,7 @@ export default function HomePage() {
             {ACCOUNTS.map((account) => (
               <button
                 key={account.userName}
-                onClick={() => { setActiveTab(account.userName); setError(null); setLeftView("feed"); setDetailTweet(null) }}
+                onClick={() => { setActiveTab(account.userName); setError(null); setLeftView("feed"); setDetailTweet(null); setActiveSearch(""); setSearchQuery(""); setSearchError(null) }}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-base md:text-sm font-medium whitespace-nowrap transition-all ${
                   activeTab === account.userName
                     ? "bg-gray-900 text-white"
@@ -1382,16 +1428,56 @@ export default function HomePage() {
                   <p className="text-sm md:text-xs text-black text-center truncate">{activeAccount.description}</p>
                 </div>
               )}
+              {/* 搜索栏 */}
+              <div className="shrink-0 px-4 py-2 border-b border-gray-200/60 bg-white/50">
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    const q = searchQuery.trim()
+                    if (!q) return
+                    setActiveSearch(q)
+                    loadSearchResults(activeTab, q)
+                  }}
+                  className="flex items-center gap-2"
+                >
+                  <div className="relative flex-1">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="搜索此账户的推文..."
+                      className="w-full pl-8 pr-3 py-1.5 text-sm rounded-full border border-gray-200 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-300 focus:bg-white transition-all"
+                    />
+                  </div>
+                  {isSearchMode && (
+                    <button
+                      type="button"
+                      onClick={() => { setActiveSearch(""); setSearchQuery(""); setSearchError(null) }}
+                      className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 shrink-0"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                      清除
+                    </button>
+                  )}
+                </form>
+                {isSearchMode && (
+                  <p className="mt-1 text-xs text-gray-500">
+                    搜索「{activeSearch}」
+                    {currentSearch ? `，共 ${currentSearch.tweets.length} 条${currentSearch.hasMore ? "+" : ""}` : ""}
+                  </p>
+                )}
+              </div>
               <div ref={feedScrollRef} className="flex-1 overflow-y-auto overscroll-none hide-vertical-scrollbar min-h-0">
                 <div className="max-w-2xl mx-auto" style={{ paddingBottom: isMobile ? "env(safe-area-inset-bottom, 16px)" : undefined }}>
-                  {error && (
+                  {(isSearchMode ? searchError : error) && (
                     <div className="mx-4 mt-4 p-3 bg-red-50/90 border border-red-200 rounded-lg text-sm text-red-700 flex justify-between items-center">
-                      <span>{error}</span>
-                      <Button variant="ghost" size="sm" onClick={() => loadTweets(activeTab, undefined, true)}>重试</Button>
+                      <span>{isSearchMode ? searchError : error}</span>
+                      {!isSearchMode && <Button variant="ghost" size="sm" onClick={() => loadTweets(activeTab, undefined, true)}>重试</Button>}
                     </div>
                   )}
 
-                  {loading && tweets.length === 0 && (
+                  {(isSearchMode ? searchLoading : loading) && displayTweets.length === 0 && (
                     <div className="flex flex-col gap-3 p-4">
                       {[...Array(5)].map((_, i) => (
                         <div key={i} className="bg-white/80 rounded-xl p-4 border border-gray-200/80 animate-pulse">
@@ -1408,12 +1494,14 @@ export default function HomePage() {
                     </div>
                   )}
 
-                  {!loading && tweets.length === 0 && !error && (
-                    <div className="text-center py-16 text-gray-400 text-sm">暂无推文</div>
+                  {!(isSearchMode ? searchLoading : loading) && displayTweets.length === 0 && !(isSearchMode ? searchError : error) && (
+                    <div className="text-center py-16 text-gray-400 text-sm">
+                      {isSearchMode ? `没有找到关于「${activeSearch}」的推文` : "暂无推文"}
+                    </div>
                   )}
 
                   <div className="divide-y divide-gray-100/80">
-                    {tweets.map((tweet, idx) => (
+                    {displayTweets.map((tweet, idx) => (
                       <TweetCard
                         key={tweet.id}
                         tweet={tweet}
@@ -1437,15 +1525,21 @@ export default function HomePage() {
                     ))}
                   </div>
 
-                  {current?.hasMore && (
+                  {displayHasMore && (
                     <div className="flex justify-center py-6">
                       <Button
                         variant="outline" size="sm"
-                        onClick={() => current?.nextCursor && loadTweets(activeTab, current.nextCursor)}
-                        disabled={loadingMore}
+                        onClick={() => {
+                          if (isSearchMode) {
+                            currentSearch?.nextCursor && loadSearchResults(activeTab, activeSearch, currentSearch.nextCursor)
+                          } else {
+                            current?.nextCursor && loadTweets(activeTab, current.nextCursor)
+                          }
+                        }}
+                        disabled={isSearchMode ? searchLoadingMore : loadingMore}
                         className="gap-2 bg-white/80 backdrop-blur-sm"
                       >
-                        {loadingMore
+                        {(isSearchMode ? searchLoadingMore : loadingMore)
                           ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" />加载中...</>
                           : <><ChevronDown className="h-3.5 w-3.5" />加载更多</>}
                       </Button>
