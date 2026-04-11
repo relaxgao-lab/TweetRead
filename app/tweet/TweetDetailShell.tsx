@@ -7,6 +7,7 @@ import { ChevronDown, RefreshCw, Sparkles } from "lucide-react"
 
 import type { Tweet } from "@/lib/twitter"
 import { formatRelativeTime, formatCount } from "@/lib/twitter"
+import { useSelectionScrollLock } from "@/lib/hooks"
 import {
   accumulateCommentsForTweet,
   buildCommentAnalysisPrompt,
@@ -63,6 +64,8 @@ export function TweetDetailShell({
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const detailScrollRef = useRef<HTMLDivElement>(null)
+  useSelectionScrollLock(detailScrollRef)
 
   // 评论列表 state
   const [comments, setComments] = useState<Tweet[]>(initialComments)
@@ -96,9 +99,7 @@ export function TweetDetailShell({
     })
   }, [])
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages])
+  // Scroll is now managed inside MessageList (smart scroll that respects user position)
 
   const sendMessage = useCallback(
     async (text: string, options?: { maxTokens?: number; displayContent?: string }) => {
@@ -399,7 +400,7 @@ export function TweetDetailShell({
       <div className="relative z-10 flex min-h-0 flex-1 overflow-hidden">
         {/* 左侧：推文详情 + 评论 */}
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden min-w-0">
-          <div className="flex-1 overflow-y-auto hide-vertical-scrollbar min-h-0">
+          <div ref={detailScrollRef} className="flex-1 overflow-y-auto hide-vertical-scrollbar min-h-0">
             <div className="max-w-2xl mx-auto py-4 px-4">
               {/* 原推文 */}
               <article className="bg-white/90 rounded-2xl border border-gray-200/80 p-4 shadow-sm mb-4">

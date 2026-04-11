@@ -1,6 +1,8 @@
 "use client"
 
 import type React from "react"
+import { useRef } from "react"
+import { useAutoScroll } from "@/lib/hooks"
 import Image from "next/image"
 import { ChevronDown, ChevronUp, ExternalLink, Mic, Send, Sparkles, StopCircle, Volume2, X } from "lucide-react"
 
@@ -8,6 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import type { SpeechStatus } from "@/app/conversation/whisper-speech-service"
 import { formatRelativeTime, type Tweet } from "@/lib/twitter"
+import { useSelectionScrollLock } from "@/lib/hooks"
 
 export interface AiMessage {
   role: "user" | "assistant"
@@ -208,6 +211,11 @@ function MessageList({
   messagesEndRef: React.RefObject<HTMLDivElement | null>
   onAssistantTextSelect: (selection: AssistantSelectionPayload) => void
 }) {
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  useSelectionScrollLock(scrollContainerRef)
+  const { userScrolledUp, scrollToBottom } = useAutoScroll(scrollContainerRef, messagesEndRef, messages)
+  const showScrollButton = userScrolledUp && isChatLoading
+
   const readAssistantSelection = (
     container: HTMLDivElement | null,
     messageIndex: number,
@@ -245,8 +253,20 @@ function MessageList({
   }
 
   return (
+    <div className="relative flex-1 min-h-0">
+      {showScrollButton && (
+        <button
+          type="button"
+          onClick={scrollToBottom}
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white border border-gray-200 shadow-md text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+        >
+          <ChevronDown className="h-3.5 w-3.5" />
+          新消息
+        </button>
+      )}
     <div
-      className="flex-1 overflow-y-auto p-4 space-y-4 hide-vertical-scrollbar"
+      ref={scrollContainerRef}
+      className="h-full overflow-y-auto p-4 space-y-4 hide-vertical-scrollbar"
       style={variant === "mobile" ? { paddingBottom: "env(safe-area-inset-bottom)" } : undefined}
     >
       {!selectedTweet && (
@@ -350,6 +370,7 @@ function MessageList({
       )}
 
       <div ref={messagesEndRef} />
+    </div>
     </div>
   )
 }

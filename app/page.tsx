@@ -7,6 +7,7 @@ import { SelectionActionMenu } from "@/components/selection-action-menu"
 import { ACCOUNTS } from "@/config/accounts"
 import type { Tweet } from "@/lib/twitter"
 import { formatRelativeTime, formatCount } from "@/lib/twitter"
+import { useSelectionScrollLock } from "@/lib/hooks"
 import {
   accumulateCommentsForTweet,
   buildCommentAnalysisPrompt,
@@ -313,6 +314,7 @@ export default function HomePage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const feedScrollRef = useRef<HTMLDivElement>(null)
+  useSelectionScrollLock(feedScrollRef)
   const tweetsAbortRef = useRef<AbortController | null>(null)
   const transcriptCallback = useRef<((text: string) => void) | null>(null)
   const keepMenuOpenForReadAloudRef = useRef(false)
@@ -915,9 +917,7 @@ export default function HomePage() {
     })
   }, [])
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages])
+  // Scroll is now managed inside MessageList (smart scroll that respects user position)
 
   // ── 发送消息（SSE 流式）──
   const sendMessage = useCallback(async (
