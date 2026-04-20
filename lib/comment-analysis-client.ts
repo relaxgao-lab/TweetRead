@@ -97,7 +97,7 @@ export function buildCommentAnalysisPrompt(
   const header = `以下是原推文（供你对照语境）：
 @${tweet.author.userName}：${tweet.text.trim()}
 
-下面是一条推文下的评论列表。请用中文归纳、总结评论中的主要观点，可按立场或主题分组，并简要说明各组的代表意见。若评论为空或极少，直接说明即可。回答请使用 [SPEAK]...[/SPEAK] 包裹适合朗读的摘要。`
+下面是一条推文下的评论列表。请用中文归纳、总结评论中的主要观点，可按立场或主题分组，并简要说明各组的代表意见。若评论为空或极少，直接说明即可。`
 
   const capNote = opts?.hitCap
     ? "\n\n（说明：评论数量较多，以下仅包含已加载的部分评论，归纳时请注明分析基于部分评论。）\n"

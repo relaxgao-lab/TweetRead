@@ -58,7 +58,6 @@ type AiPanelProps = {
   messagesEndRef: React.RefObject<HTMLDivElement | null>
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
   formatTweetText: (text: string) => string
-  renderAssistantContent: (content: string) => string
   width?: number
   minWidth?: number
   isOpen?: boolean
@@ -467,7 +466,6 @@ function MessageList({
   commentAnalysisPrefetching,
   speechStatus,
   formatTweetText,
-  renderAssistantContent,
   messagesEndRef,
   onAssistantTextSelect,
 }: {
@@ -478,7 +476,6 @@ function MessageList({
   commentAnalysisPrefetching?: boolean
   speechStatus: SpeechStatus
   formatTweetText: (text: string) => string
-  renderAssistantContent: (content: string) => string
   messagesEndRef: React.RefObject<HTMLDivElement | null>
   onAssistantTextSelect: (selection: AssistantSelectionPayload) => void
 }) {
@@ -575,7 +572,7 @@ function MessageList({
                   }}
                 >
                   {msg.content
-                    ? <AssistantMarkdown text={renderAssistantContent(msg.content)} />
+                    ? <AssistantMarkdown text={msg.content} />
                     : <LoadingDots />}
                 </div>
                 {i === messages.length - 1 && speechStatus === "speaking" && (
@@ -829,7 +826,6 @@ function PanelBody(props: AiPanelProps) {
     messagesEndRef,
     textareaRef,
     formatTweetText,
-    renderAssistantContent,
     sheetState,
     onExpand,
     onCommentAnalysis,
@@ -889,7 +885,6 @@ function PanelBody(props: AiPanelProps) {
         commentAnalysisPrefetching={commentAnalysisPrefetching}
         speechStatus={speechStatus}
         formatTweetText={formatTweetText}
-        renderAssistantContent={renderAssistantContent}
         messagesEndRef={messagesEndRef}
         onAssistantTextSelect={onAssistantTextSelect}
       />

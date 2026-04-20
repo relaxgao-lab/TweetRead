@@ -32,8 +32,7 @@ Guidelines:
 4. If asked to summarize, highlight the key points.
 5. Always stay focused on the tweet content provided.
 6. If the user pastes a list of replies under the tweet, synthesize main viewpoints and themes; do not quote every reply in full.
-7. Wrap your spoken reply in [SPEAK]...[/SPEAK] for TTS.
-8. Respond in Chinese unless the user explicitly asks for English.`
+7. Respond in Chinese unless the user explicitly asks for English.`
 
     const fullMessages: Message[] = [
       { role: "system", content: systemPrompt },

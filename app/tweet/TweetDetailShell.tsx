@@ -31,14 +31,6 @@ function smartCase(text: string): string {
   return text.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase())
 }
 
-function extractSpeakContent(content: string): string {
-  // Strip [SPEAK] / [/SPEAK] tags but keep all text. The previous behavior of
-  // returning only the SPEAK-wrapped fragment caused the displayed message to
-  // suddenly shrink the moment the closing tag arrived during streaming.
-  const stripped = content.replace(/\[\s*\/?\s*SPEAK\s*\]/gi, "").trim()
-  return stripped || content
-}
-
 function detailSceneMeta(tweet: Tweet) {
   return {
     aiRole: "a professional tweet analyst and financial/tech news interpreter",
@@ -556,7 +548,6 @@ export function TweetDetailShell({
             messagesEndRef={messagesEndRef}
             textareaRef={textareaRef}
             formatTweetText={smartCase}
-            renderAssistantContent={extractSpeakContent}
             width={420}
             minWidth={280}
             isOpen
@@ -620,7 +611,6 @@ export function TweetDetailShell({
               messagesEndRef={messagesEndRef}
               textareaRef={textareaRef}
               formatTweetText={smartCase}
-              renderAssistantContent={extractSpeakContent}
               sheetHeight={Math.round(window.innerHeight * 0.7)}
               isDragging={false}
               sheetState="half"

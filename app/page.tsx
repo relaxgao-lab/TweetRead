@@ -4,7 +4,8 @@ import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from
 import Image from "next/image"
 import { AiPanel, type AiMessage } from "@/components/ai-panel"
 import { SelectionActionMenu } from "@/components/selection-action-menu"
-import { LookupResultPopup } from "@/components/lookup-result-popup"
+import { FloatingChatWindow } from "@/components/floating-chat-window"
+import { streamChatResponse } from "@/lib/use-chat-stream"
 import { ACCOUNTS } from "@/config/accounts"
 import type { Tweet } from "@/lib/twitter"
 import { formatRelativeTime, formatCount } from "@/lib/twitter"
@@ -85,14 +86,6 @@ function buildSceneMeta(tweet: Tweet) {
     context: `${authorContext}\n\nTweet by @${tweet.author.userName} (${tweet.author.name}) — ${tweet.createdAt}:\n"${tweet.text}"\n\nEngagement: ${tweet.likeCount} likes, ${tweet.retweetCount} retweets, ${tweet.replyCount} replies, ${tweet.viewCount} views.`,
     scenario: tweet.text,
   }
-}
-
-function extractSpeakContent(content: string): string {
-  // Strip [SPEAK] / [/SPEAK] tags but keep all text. The previous behavior of
-  // returning only the SPEAK-wrapped fragment caused the displayed message to
-  // suddenly shrink the moment the closing tag arrived during streaming.
-  const stripped = content.replace(/\[\s*\/?\s*SPEAK\s*\]/gi, "").trim()
-  return stripped || content
 }
 
 function smartCase(text: string): string {
@@ -329,17 +322,27 @@ export default function HomePage() {
   const [selectionMenu, setSelectionMenu] = useState<SelectionMenuState | null>(null)
   const [pendingSelectionActionId, setPendingSelectionActionId] = useState<SelectionActionId | null>(null)
 
-  // 查词/句型讲解弹出窗口
-  type LookupPopupState = {
-    text: string
-    actionId: "lookup" | "pattern"
-    anchorX: number
-    anchorY: number
+  // 选区菜单两阶段：actions（正常）| windowChoice（选打开位置）
+  type SelectionMenuPhase = "actions" | "windowChoice"
+  const [selectionMenuPhase, setSelectionMenuPhase] = useState<SelectionMenuPhase>("actions")
+  const [pendingWindowChoice, setPendingWindowChoice] = useState<{
     prompt: string
-    sceneMeta: { aiRole: string; context: string }
+    displayContent: string
     tweet: Tweet
-  }
-  const [lookupPopup, setLookupPopup] = useState<LookupPopupState | null>(null)
+    alwaysClear: boolean
+    currentPanelPrompt?: string
+    currentPanelDisplayContent?: string
+    quotedSelection?: QuotedSelectionState
+  } | null>(null)
+
+  // 浮动独立对话窗口
+  const [floatingChat, setFloatingChat] = useState<{
+    initialPrompt: string
+    displayContent: string
+    sceneMeta: { aiRole: string; context: string }
+    initialX: number
+    initialY: number
+  } | null>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -958,12 +961,13 @@ export default function HomePage() {
       displayContent?: string
       quotedSelectionOverride?: QuotedSelectionState
       maxTokens?: number
+      alwaysClear?: boolean
     },
   ) => {
     const targetTweet = options?.tweetOverride ?? selectedTweet
     if (!text.trim() || isChatLoading || !targetTweet) return
 
-    const shouldResetMessages = selectedTweet?.id !== targetTweet.id
+    const shouldResetMessages = selectedTweet?.id !== targetTweet.id || Boolean(options?.alwaysClear)
     const baseMessages = shouldResetMessages ? [] : messages
     const trimmedText = text.trim()
     const activeQuotedSelection = options?.quotedSelectionOverride ?? (
@@ -1050,54 +1054,23 @@ export default function HomePage() {
     ) => {
       setIsChatLoading(true)
       setSpeechError(null)
-      let accumulated = ""
-      let firstChunk = true
       try {
-        const res = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            messages: apiMessages,
-            sceneMeta: buildSceneMeta(tweet),
-            ...(maxTokens != null ? { maxTokens } : {}),
-          }),
-        })
-        if (!res.ok) throw new Error(`Chat API ${res.status}`)
-        if (!res.body) throw new Error("No response body")
-
-        const reader = res.body.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ""
-
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buffer += decoder.decode(value, { stream: true })
-          const lines = buffer.split("\n")
-          buffer = lines.pop() ?? ""
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue
-            const raw = line.slice(6).trim()
-            if (raw === "[DONE]") continue
-            try {
-              const { delta } = JSON.parse(raw)
-              if (delta) {
-                accumulated += delta
-                if (firstChunk) {
-                  firstChunk = false
-                  setIsChatLoading(false)
-                  setMessages((prev) => [...prev, { role: "assistant", content: accumulated }])
-                } else {
-                  setMessages((prev) => {
-                    const copy = [...prev]
-                    copy[copy.length - 1] = { role: "assistant", content: accumulated }
-                    return copy
-                  })
-                }
-              }
-            } catch {}
-          }
-        }
+        await streamChatResponse(
+          apiMessages,
+          buildSceneMeta(tweet),
+          () => {
+            setIsChatLoading(false)
+            setMessages((prev) => [...prev, { role: "assistant", content: "" }])
+          },
+          (accumulated) => {
+            setMessages((prev) => {
+              const copy = [...prev]
+              copy[copy.length - 1] = { role: "assistant", content: accumulated }
+              return copy
+            })
+          },
+          { maxTokens },
+        )
       } catch {
         setSpeechError("对话请求失败，请稍后重试")
       } finally {
@@ -1226,14 +1199,16 @@ export default function HomePage() {
     keepMenuOpenForReadAloudRef.current = false
     setSelectionMenu(null)
     setPendingSelectionActionId(null)
+    setSelectionMenuPhase("actions")
+    setPendingWindowChoice(null)
     if (clearSelection) window.getSelection()?.removeAllRanges()
-  }, [])
+  }, [setSelectionMenuPhase, setPendingWindowChoice])
 
-  const openChatForSelection = useCallback((prompt: string, tweet: Tweet, displayContent?: string) => {
+  const openChatForSelection = useCallback((prompt: string, tweet: Tweet, displayContent?: string, alwaysClear = false) => {
     if (isMobile) setSheetState("half")
     else if (!effectiveChatOpen) setIsChatOpen(true)
     setQuotedSelection(null)
-    return sendMessage(prompt, { tweetOverride: tweet, includeQuotedSelection: false, displayContent })
+    return sendMessage(prompt, { tweetOverride: tweet, includeQuotedSelection: false, displayContent, alwaysClear })
   }, [effectiveChatOpen, isMobile, sendMessage])
 
   const focusChatInput = useCallback(() => {
@@ -1269,77 +1244,61 @@ export default function HomePage() {
       if (actionId === "lookup" || actionId === "pattern") {
         const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text)
         if (!prompt) return
-        closeSelectionMenu(true)
-        setLookupPopup({
+        const displayContent = actionId === "lookup" ? `查词：「${text}」` : `句型讲解：「${text}」`
+        setSelectionMenuPhase("windowChoice")
+        setPendingWindowChoice({ prompt, displayContent, tweet, alwaysClear: false })
+        return
+      }
+      if (actionId === "explainReply" || actionId === "translateReply") {
+        const quotedSelectionObj: QuotedSelectionState = {
           text,
-          actionId,
-          anchorX: selection.anchorX,
-          anchorY: selection.anchorY,
-          prompt,
-          sceneMeta: buildSceneMeta(tweet),
+          sourceRole: "assistant",
+          messageIndex: selection.messageIndex ?? messages.length - 1,
+          fullMessageContent: selection.fullMessageContent ?? text,
+        }
+        const newWindowPrompt = actionId === "explainReply"
+          ? `请详细解释这段内容的含义，包括语气、背景和关键表达：\n\n「${text}」`
+          : `请将以下内容翻译成自然流畅的中文，并解释关键表达：\n\n「${text}」`
+        const displayContent = actionId === "explainReply" ? `解释：「${text}」` : `翻译：「${text}」`
+        setSelectionMenuPhase("windowChoice")
+        setPendingWindowChoice({
+          prompt: newWindowPrompt,
+          displayContent,
           tweet,
+          alwaysClear: false,
+          currentPanelPrompt: buildAssistantDraft(actionId),
+          currentPanelDisplayContent: actionId === "explainReply" ? "解释这段" : "翻译这段",
+          quotedSelection: quotedSelectionObj,
         })
         return
       }
+      // quoteReply
       const quotedSelectionObj: QuotedSelectionState = {
         text,
         sourceRole: "assistant",
         messageIndex: selection.messageIndex ?? messages.length - 1,
         fullMessageContent: selection.fullMessageContent ?? text,
       }
-      if (actionId === "explainReply" || actionId === "translateReply") {
-        const question = buildAssistantDraft(actionId)
-        closeSelectionMenu(true)
-        if (isMobile) setSheetState("half")
-        else if (!effectiveChatOpen) setIsChatOpen(true)
-        const displayContent =
-          actionId === "explainReply" ? "解释这段" :
-          "翻译这段"
-        await sendMessage(question, { quotedSelectionOverride: quotedSelectionObj, displayContent })
-      } else {
-        setQuotedSelection(quotedSelectionObj)
-        setInputText((current) => mergeDraftText(current, SELECTION_ACTIONS[actionId].buildDraft?.() ?? ""))
-        closeSelectionMenu(true)
-        focusChatInput()
-      }
+      setQuotedSelection(quotedSelectionObj)
+      setInputText((current) => mergeDraftText(current, SELECTION_ACTIONS[actionId].buildDraft?.() ?? ""))
+      closeSelectionMenu(true)
+      focusChatInput()
       return
     }
 
-    const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text)
-    if (!prompt) return
-    closeSelectionMenu(true)
     if (actionId === "lookup" || actionId === "pattern") {
-      setLookupPopup({
-        text,
-        actionId,
-        anchorX: selection.anchorX,
-        anchorY: selection.anchorY,
-        prompt,
-        sceneMeta: buildSceneMeta(tweet),
-        tweet,
-      })
+      const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text)
+      if (!prompt) return
+      const displayContent = actionId === "lookup" ? `查词：「${text}」` : `句型讲解：「${text}」`
+      setSelectionMenuPhase("windowChoice")
+      setPendingWindowChoice({ prompt, displayContent, tweet, alwaysClear: true })
       return
     }
-    await openChatForSelection(prompt, tweet, undefined)
-  }, [closeSelectionMenu, effectiveChatOpen, focusChatInput, isMobile, messages.length, openChatForSelection, sendMessage, setLookupPopup])
-
-  const handleLookupFollowUp = useCallback((result: string) => {
-    if (!lookupPopup) return
-    const { text, actionId, tweet } = lookupPopup
-    const displayContent = actionId === "lookup" ? `查词：「${text}」` : `句型讲解：「${text}」`
-    const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text) ?? text
-    setLookupPopup(null)
-    setSelectedTweet(tweet)
-    setMessages([
-      { role: "user", content: prompt, displayContent },
-      { role: "assistant", content: result },
-    ])
-    setInputText("")
-    setQuotedSelection(null)
-    if (isMobile) setSheetState("half")
-    else if (!effectiveChatOpen) setIsChatOpen(true)
-    requestAnimationFrame(() => textareaRef.current?.focus())
-  }, [lookupPopup, isMobile, effectiveChatOpen])
+    await openChatForSelection(
+      SELECTION_ACTIONS[actionId].buildPrompt?.(text) ?? text,
+      tweet, undefined, true,
+    )
+  }, [closeSelectionMenu, effectiveChatOpen, focusChatInput, isMobile, messages.length, openChatForSelection, sendMessage, setSelectionMenuPhase, setPendingWindowChoice])
 
   const handleAssistantTextSelect = useCallback((selection: {
     text: string
@@ -1379,6 +1338,8 @@ export default function HomePage() {
   // selectionchange：用户拖动手柄扩大/缩小选区时，只更新文本（不更新位置，避免菜单跳动）
   const selectionMenuRef = useRef(selectionMenu)
   selectionMenuRef.current = selectionMenu
+  const selectionMenuPhaseRef = useRef(selectionMenuPhase)
+  selectionMenuPhaseRef.current = selectionMenuPhase
   useEffect(() => {
     const handleSelectionChange = () => {
       if (!selectionMenuRef.current) return
@@ -1386,6 +1347,7 @@ export default function HomePage() {
       const text = sel?.toString().trim()
       if (!text) {
         if (keepMenuOpenForReadAloudRef.current) return
+        if (selectionMenuPhaseRef.current === "windowChoice") return
         closeSelectionMenu()
         return
       }
@@ -1679,7 +1641,6 @@ export default function HomePage() {
               messagesEndRef={messagesEndRef}
               textareaRef={textareaRef}
               formatTweetText={smartCase}
-              renderAssistantContent={extractSpeakContent}
               width={mounted ? chatWidth : DEFAULT_CHAT_WIDTH}
               minWidth={mounted ? MIN_CHAT_WIDTH : DEFAULT_CHAT_WIDTH}
               isOpen={effectiveChatOpen}
@@ -1727,7 +1688,6 @@ export default function HomePage() {
               messagesEndRef={messagesEndRef}
               textareaRef={textareaRef}
               formatTweetText={smartCase}
-              renderAssistantContent={extractSpeakContent}
               sheetHeight={sheetHeight}
               isDragging={isDragging}
               sheetState={sheetState}
@@ -1761,9 +1721,44 @@ export default function HomePage() {
         <SelectionActionMenu
           anchorX={selectionMenu.anchorX}
           anchorY={selectionMenu.anchorY}
-          primaryActions={primarySelectionActions}
+          primaryActions={
+            selectionMenuPhase === "windowChoice"
+              ? [
+                  { id: "choiceCurrentPanel", label: "当前对话" },
+                  { id: "choiceNewWindow", label: "新窗口" },
+                ]
+              : primarySelectionActions
+          }
           loadingActionId={pendingSelectionActionId}
           onAction={(actionId) => {
+            if (selectionMenuPhase === "windowChoice" && pendingWindowChoice) {
+              const { prompt, displayContent, tweet, alwaysClear, currentPanelPrompt, currentPanelDisplayContent, quotedSelection } = pendingWindowChoice
+              setSelectionMenuPhase("actions")
+              setPendingWindowChoice(null)
+              if (actionId === "choiceCurrentPanel") {
+                closeSelectionMenu(true)
+                if (quotedSelection) {
+                  if (isMobile) setSheetState("half")
+                  else if (!effectiveChatOpen) setIsChatOpen(true)
+                  void sendMessage(currentPanelPrompt ?? prompt, {
+                    quotedSelectionOverride: quotedSelection,
+                    displayContent: currentPanelDisplayContent,
+                  })
+                } else {
+                  void openChatForSelection(prompt, tweet, displayContent, alwaysClear)
+                }
+              } else if (actionId === "choiceNewWindow") {
+                closeSelectionMenu(true)
+                setFloatingChat({
+                  initialPrompt: prompt,
+                  displayContent,
+                  sceneMeta: buildSceneMeta(tweet),
+                  initialX: selectionMenu.anchorX,
+                  initialY: selectionMenu.anchorY,
+                })
+              }
+              return
+            }
             const action = selectionMenu ? SELECTION_ACTIONS[actionId as SelectionActionId] : null
             if (!action || !selectionMenu || pendingSelectionActionId === action.id) return
             void handleSelectionAction(action.id, selectionMenu)
@@ -1771,17 +1766,16 @@ export default function HomePage() {
         />
       )}
 
-      {/* ── 查词/句型讲解弹出窗口 ── */}
-      {lookupPopup && (
-        <LookupResultPopup
-          text={lookupPopup.text}
-          actionId={lookupPopup.actionId}
-          anchorX={lookupPopup.anchorX}
-          anchorY={lookupPopup.anchorY}
-          prompt={lookupPopup.prompt}
-          sceneMeta={lookupPopup.sceneMeta}
-          onClose={() => setLookupPopup(null)}
-          onFollowUp={handleLookupFollowUp}
+
+      {/* ── 浮动独立对话窗口 ── */}
+      {floatingChat && (
+        <FloatingChatWindow
+          initialPrompt={floatingChat.initialPrompt}
+          displayContent={floatingChat.displayContent}
+          sceneMeta={floatingChat.sceneMeta}
+          initialX={floatingChat.initialX}
+          initialY={floatingChat.initialY}
+          onClose={() => setFloatingChat(null)}
         />
       )}
 
