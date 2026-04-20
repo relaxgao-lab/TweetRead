@@ -14,6 +14,7 @@ import { Textarea } from "@/components/ui/textarea"
 import type { SpeechStatus } from "@/app/conversation/whisper-speech-service"
 import { formatRelativeTime, type Tweet } from "@/lib/twitter"
 import { useSelectionScrollLock } from "@/lib/hooks"
+import { readSelectionAnchor } from "@/lib/selection"
 
 export interface AiMessage {
   role: "user" | "assistant"
@@ -116,49 +117,131 @@ function LoadingDots() {
 }
 
 const CHIP_OPEN = "\u200B\u200B"
-const CHIP_SEP = "\u200C"
+const CHIP_SEP_ROLE = "\u200C"
+const CHIP_SEP_BETWEEN = "\u200D"
+const CHIP_SEP_TEXT = "\u200E"
 const CHIP_CLOSE = "\u200B\u200B"
-const CHIP_PATTERN = /\u200B\u200B([^\u200B\u200C]+)\u200C([^\u200B]+)\u200B\u200B/g
-const RAW_CHIP_PATTERN = /\[([^\]\n]{1,80})\]\{([A-Za-z][A-Za-z \-/]{0,40})\}/g
+const CHIP_PATTERN = /\u200B\u200B([^\u200B-\u200E]*)\u200C([^\u200B-\u200E]*)\u200D([^\u200B-\u200E]*)\u200E([^\u200B-\u200E]*)\u200B\u200B/g
+const RAW_CHIP_PATTERN = /\[([^\]\n]{1,160})\]\{([A-Za-z\u4e00-\u9fa5][^\}\n]{0,80})\}/g
 
 const ROLE_STYLES: Record<string, string> = {
   subject: "bg-sky-100 text-sky-800 border-sky-200",
+  主语: "bg-sky-100 text-sky-800 border-sky-200",
   predicate: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  谓语: "bg-emerald-100 text-emerald-800 border-emerald-200",
   verb: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  动词: "bg-emerald-100 text-emerald-800 border-emerald-200",
   object: "bg-amber-100 text-amber-800 border-amber-200",
+  宾语: "bg-amber-100 text-amber-800 border-amber-200",
   "direct object": "bg-amber-100 text-amber-800 border-amber-200",
+  直接宾语: "bg-amber-100 text-amber-800 border-amber-200",
   "indirect object": "bg-orange-100 text-orange-800 border-orange-200",
+  间接宾语: "bg-orange-100 text-orange-800 border-orange-200",
   complement: "bg-orange-100 text-orange-800 border-orange-200",
+  补语: "bg-orange-100 text-orange-800 border-orange-200",
   adverbial: "bg-violet-100 text-violet-800 border-violet-200",
+  状语: "bg-violet-100 text-violet-800 border-violet-200",
   "adverbial clause": "bg-violet-100 text-violet-800 border-violet-200",
+  状语从句: "bg-violet-100 text-violet-800 border-violet-200",
+  "adverbial clause of reason": "bg-violet-100 text-violet-800 border-violet-200",
+  原因状语从句: "bg-violet-100 text-violet-800 border-violet-200",
+  "adverbial clause of time": "bg-violet-100 text-violet-800 border-violet-200",
+  时间状语从句: "bg-violet-100 text-violet-800 border-violet-200",
+  "adverbial clause of condition": "bg-violet-100 text-violet-800 border-violet-200",
+  条件状语从句: "bg-violet-100 text-violet-800 border-violet-200",
+  "adverbial clause of purpose": "bg-violet-100 text-violet-800 border-violet-200",
+  目的状语从句: "bg-violet-100 text-violet-800 border-violet-200",
+  "adverbial clause of result": "bg-violet-100 text-violet-800 border-violet-200",
+  结果状语从句: "bg-violet-100 text-violet-800 border-violet-200",
+  "adverbial clause of concession": "bg-violet-100 text-violet-800 border-violet-200",
+  让步状语从句: "bg-violet-100 text-violet-800 border-violet-200",
   adjunct: "bg-violet-100 text-violet-800 border-violet-200",
   attributive: "bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200",
+  定语: "bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200",
+  "attributive clause": "bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200",
+  定语从句: "bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200",
+  clause: "bg-purple-100 text-purple-800 border-purple-200",
+  从句: "bg-purple-100 text-purple-800 border-purple-200",
+  "noun clause": "bg-purple-100 text-purple-800 border-purple-200",
+  名词性从句: "bg-purple-100 text-purple-800 border-purple-200",
   conjunction: "bg-gray-100 text-gray-700 border-gray-200",
+  连词: "bg-gray-100 text-gray-700 border-gray-200",
   preposition: "bg-slate-100 text-slate-700 border-slate-200",
+  介词: "bg-slate-100 text-slate-700 border-slate-200",
+  "prepositional phrase": "bg-slate-100 text-slate-700 border-slate-200",
+  介词短语: "bg-slate-100 text-slate-700 border-slate-200",
   modifier: "bg-teal-100 text-teal-800 border-teal-200",
+  修饰语: "bg-teal-100 text-teal-800 border-teal-200",
+  appositive: "bg-cyan-100 text-cyan-800 border-cyan-200",
+  同位语: "bg-cyan-100 text-cyan-800 border-cyan-200",
 }
 
 function chipClass(role: string): string {
   const key = role.trim().toLowerCase()
-  return ROLE_STYLES[key] ?? "bg-pink-100 text-pink-800 border-pink-200"
+  return ROLE_STYLES[key] ?? ROLE_STYLES[role.trim()] ?? "bg-pink-100 text-pink-800 border-pink-200"
 }
 
-function Chip({ role, children }: { role: string; children: React.ReactNode }) {
+function splitBilingual(raw: string): { en: string; zh: string } {
+  const parts = raw.split("|")
+  if (parts.length >= 2) {
+    return { en: parts[0].trim(), zh: parts.slice(1).join("|").trim() }
+  }
+  return { en: raw.trim(), zh: "" }
+}
+
+function Chip({
+  roleEn,
+  roleZh,
+  textEn,
+  textZh,
+}: {
+  roleEn: string
+  roleZh: string
+  textEn: string
+  textZh: string
+}) {
+  const styleKey = roleEn || roleZh
+  const showTextZh = textZh && textZh !== textEn
+  const showRoleZh = roleZh && roleEn.toLowerCase() !== roleZh.toLowerCase()
   return (
     <span
-      className={`inline-flex items-baseline gap-1 px-1.5 py-0.5 mx-0.5 rounded-md border text-[0.88em] leading-tight whitespace-nowrap align-baseline ${chipClass(role)}`}
-      data-chip-role={role}
+      className={`inline-flex items-baseline gap-1.5 px-2 py-0.5 mx-0.5 my-0.5 rounded-md border text-[0.9em] leading-tight whitespace-nowrap align-baseline ${chipClass(styleKey)}`}
+      data-chip-role={styleKey}
     >
-      <span className="font-medium">{children}</span>
-      <span className="text-[0.7em] opacity-70 font-normal">{role.trim()}</span>
+      <span className="font-medium">
+        {textEn}
+        {showTextZh && <span className="text-[0.85em] opacity-70 font-normal"> / {textZh}</span>}
+      </span>
+      <span className="text-[0.72em] opacity-70 font-normal border-l border-current/30 pl-1.5">
+        {roleEn}
+        {showRoleZh && <span>·{roleZh}</span>}
+      </span>
     </span>
   )
 }
 
 function preprocessChips(md: string): string {
-  return md.replace(RAW_CHIP_PATTERN, (_, text: string, role: string) => {
-    return `${CHIP_OPEN}${role.trim()}${CHIP_SEP}${text}${CHIP_CLOSE}`
+  const replaced = md.replace(RAW_CHIP_PATTERN, (_, text: string, role: string) => {
+    const t = splitBilingual(text)
+    const r = splitBilingual(role)
+    return `${CHIP_OPEN}${r.en}${CHIP_SEP_ROLE}${r.zh}${CHIP_SEP_BETWEEN}${t.en}${CHIP_SEP_TEXT}${t.zh}${CHIP_CLOSE}`
   })
+
+  // Defense: the AI occasionally wraps the annotation paragraph in a code block
+  // or inline code, which blocks chip rendering. If a code region's content
+  // contains chip sentinels, unwrap it so the chips render as real elements.
+  // Fenced code block (```lang\n...\n``` or ```\n...\n```) whose body contains
+  // at least one chip sentinel → strip the fences.
+  const strippedFenced = replaced.replace(
+    /```[^\n`]*\n([\s\S]*?)\n?```/g,
+    (whole, body: string) => (body.includes(CHIP_OPEN) ? body : whole),
+  )
+  // Inline code `...` whose body contains chip sentinels → strip the backticks.
+  const strippedInline = strippedFenced.replace(
+    /`([^`\n]*)`/g,
+    (whole, body: string) => (body.includes(CHIP_OPEN) ? body : whole),
+  )
+  return strippedInline
 }
 
 function renderStringWithChips(input: string, keyPrefix: string): React.ReactNode {
@@ -169,10 +252,15 @@ function renderStringWithChips(input: string, keyPrefix: string): React.ReactNod
   let m: RegExpExecArray | null
   while ((m = re.exec(input)) !== null) {
     if (m.index > lastIndex) parts.push(input.slice(lastIndex, m.index))
+    const [, roleEn, roleZh, textEn, textZh] = m
     parts.push(
-      <Chip key={`${keyPrefix}-${m.index}`} role={m[1]}>
-        {m[2]}
-      </Chip>,
+      <Chip
+        key={`${keyPrefix}-${m.index}`}
+        roleEn={roleEn}
+        roleZh={roleZh}
+        textEn={textEn}
+        textZh={textZh}
+      />,
     )
     lastIndex = m.index + m[0].length
   }
@@ -405,34 +493,15 @@ function MessageList({
     fullMessageContent: string,
   ) => {
     if (!container) return
-    const sel = window.getSelection()
-    if (!sel || sel.rangeCount === 0) return
-
-    const text = sel.toString().trim()
-    if (!text || text.length > 300) return
-
-    const range = sel.getRangeAt(0)
-    if (!container.contains(range.commonAncestorContainer)) return
-
-    try {
-      const rect = range.getBoundingClientRect()
-      const rects = range.getClientRects()
-      let anchorY = rect.bottom
-      if (rects.length > 0) {
-        let maxBottom = rects[0].bottom
-        for (let i = 1; i < rects.length; i++) {
-          if (rects[i].bottom > maxBottom) maxBottom = rects[i].bottom
-        }
-        anchorY = maxBottom
-      }
-      onAssistantTextSelect({
-        text,
-        anchorX: rect.left + rect.width / 2,
-        anchorY,
-        messageIndex,
-        fullMessageContent,
-      })
-    } catch {}
+    const anchor = readSelectionAnchor({ container, maxLength: 300 })
+    if (!anchor) return
+    onAssistantTextSelect({
+      text: anchor.text,
+      anchorX: anchor.anchorX,
+      anchorY: anchor.anchorY,
+      messageIndex,
+      fullMessageContent,
+    })
   }
 
   return (

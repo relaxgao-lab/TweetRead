@@ -4,10 +4,12 @@ import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from
 import Image from "next/image"
 import { AiPanel, type AiMessage } from "@/components/ai-panel"
 import { SelectionActionMenu } from "@/components/selection-action-menu"
+import { LookupResultPopup } from "@/components/lookup-result-popup"
 import { ACCOUNTS } from "@/config/accounts"
 import type { Tweet } from "@/lib/twitter"
 import { formatRelativeTime, formatCount } from "@/lib/twitter"
 import { useSelectionScrollLock } from "@/lib/hooks"
+import { readSelectionAnchor } from "@/lib/selection"
 import {
   accumulateCommentsForTweet,
   buildCommentAnalysisPrompt,
@@ -33,7 +35,7 @@ type SheetState = "hidden" | "half" | "full"
 type TweetCache = Record<string, { tweets: Tweet[]; hasMore: boolean; nextCursor?: string; loadedAt: number }>
 type SelectionMode = "wordOrPhrase" | "sentenceOrPassage"
 type SelectionSource = "tweet" | "assistantReply"
-type SelectionActionId = "lookup" | "pattern" | "readAloud" | "followUp" | "explainReply" | "translateReply" | "quoteReply"
+type SelectionActionId = "lookup" | "pattern" | "readAloud" | "explainReply" | "translateReply" | "quoteReply"
 type SelectionAction = { id: SelectionActionId; label: string; buildPrompt?: (text: string) => string; buildDraft?: () => string }
 type SelectionMenuState = {
   text: string
@@ -86,9 +88,11 @@ function buildSceneMeta(tweet: Tweet) {
 }
 
 function extractSpeakContent(content: string): string {
-  const m = content.match(/\[\s*SPEAK\s*\]([\s\S]*?)\[\s*\/\s*SPEAK\s*\]/i)
-  if (m) return m[1].trim()
-  return content.replace(/\[\s*\/?\s*SPEAK\s*\]/gi, "").trim() || content
+  // Strip [SPEAK] / [/SPEAK] tags but keep all text. The previous behavior of
+  // returning only the SPEAK-wrapped fragment caused the displayed message to
+  // suddenly shrink the moment the closing tag arrived during streaming.
+  const stripped = content.replace(/\[\s*\/?\s*SPEAK\s*\]/gi, "").trim()
+  return stripped || content
 }
 
 function smartCase(text: string): string {
@@ -160,18 +164,26 @@ function buildLookupPrompt(text: string): string {
 function buildPatternPrompt(text: string): string {
   return `Please analyze the selected sentence comprehensively based on the context: 「${text}」
 
-1. **Sentence Meaning**: Explain the literal meaning of the entire sentence.
-2. **Sentence Structure**: Annotate the sentence components directly on the original sentence, like grading homework. Use the format: [word or phrase]{component name}. For example: [Elon Musk]{Subject} [snapped]{Predicate} [a photo]{Object}. Components to annotate include: Subject, Predicate, Object, Attributive, Adverbial, Complement, Clause.
-3. **Key Phrase Analysis**: Explain the extended meaning, cultural background, or usage in specific contexts of core phrases (such as idioms, slang).
-4. **Contextual Dialogue**: Provide a realistic dialogue example using this sentence.
+1. **Sentence Meaning / 句子含义**: Explain the literal meaning of the entire sentence in both English and Chinese.
+2. **Sentence Structure / 句子结构**: Annotate every sentence component using the BILINGUAL annotation format [EnglishWord|中文翻译]{EnglishRole|中文角色}.
+   - Example (write it as a normal paragraph, not inside a code block):
+     [Elon Musk|埃隆·马斯克]{Subject|主语} [snapped|拍下]{Predicate|谓语} [a photo|一张照片]{Object|宾语} [in the garden|在花园里]{Adverbial|状语}
+   - The role part MUST always be bilingual — English and Chinese separated by a single vertical bar "|".
+   - If a word does not need translation (proper nouns, tickers, names), repeat it on both sides: [Elon Musk|Elon Musk], [\\$GLW|\\$GLW].
+   - Components to annotate: Subject/主语, Predicate/谓语, Object/宾语, Attributive/定语, Adverbial/状语, Complement/补语, Clause/从句, Conjunction/连词, Preposition/介词. For subordinate clauses, use descriptive labels like "Adverbial Clause of Reason|原因状语从句", "Attributive Clause|定语从句", etc.
+   - CRITICAL FORMATTING RULES for this section:
+     a. Output the bilingual annotation EXACTLY ONCE, as a single regular paragraph.
+     b. DO NOT wrap the annotation in backticks, inline code, or a fenced code block. Write it as plain prose.
+     c. DO NOT produce a separate "中文标注" line or any duplicate single-language annotation afterwards.
+     d. Separate consecutive chips with a single space only. No comma, no bracket, no backtick.
+3. **Key Phrase Analysis / 关键词短语解析**: Explain core phrases (idioms, slang, cultural references) in both English and Chinese.
+4. **Contextual Dialogue / 语境对话**: Provide a realistic dialogue example using this sentence, with both English and Chinese versions.
 
-**Requirements**: All analysis should be provided in both English and Chinese, with clean formatting.`
+**Formatting**: Use clean Markdown — headings, bullet lists, and bold emphasis are encouraged. Code blocks are only for actual code; never use them for annotations or regular sentences. Keep explanations concise.`
 }
 
 function buildAssistantDraft(actionId: SelectionActionId): string {
   switch (actionId) {
-    case "followUp":
-      return "请基于我引用的这段回复，继续展开说明："
     case "explainReply":
       return "请结合上下文，详细解释我引用的这段回复，尤其想知道："
     case "translateReply":
@@ -214,10 +226,9 @@ ${question}`
 const SELECTION_ACTIONS: Record<SelectionActionId, SelectionAction> = {
   lookup: { id: "lookup", label: "查词", buildPrompt: buildLookupPrompt },
   pattern: { id: "pattern", label: "句型讲解", buildPrompt: buildPatternPrompt },
-  followUp: { id: "followUp", label: "追问这段", buildDraft: () => buildAssistantDraft("followUp") },
-  explainReply: { id: "explainReply", label: "解释这段", buildDraft: () => buildAssistantDraft("explainReply") },
-  translateReply: { id: "translateReply", label: "翻译这段", buildDraft: () => buildAssistantDraft("translateReply") },
-  quoteReply: { id: "quoteReply", label: "引用到输入框", buildDraft: () => "" },
+  explainReply: { id: "explainReply", label: "解释", buildDraft: () => buildAssistantDraft("explainReply") },
+  translateReply: { id: "translateReply", label: "翻译", buildDraft: () => buildAssistantDraft("translateReply") },
+  quoteReply: { id: "quoteReply", label: "引用", buildDraft: () => "" },
   readAloud: { id: "readAloud", label: "朗读" },
 }
 
@@ -226,7 +237,14 @@ const PRIMARY_TWEET_SELECTION_ACTIONS: Record<SelectionMode, SelectionActionId[]
   sentenceOrPassage: ["lookup", "pattern", "quoteReply", "readAloud"],
 }
 
-const PRIMARY_ASSISTANT_SELECTION_ACTIONS: SelectionActionId[] = ["followUp", "explainReply", "translateReply", "quoteReply", "readAloud"]
+const PRIMARY_ASSISTANT_SELECTION_ACTIONS: SelectionActionId[] = ["lookup", "explainReply", "translateReply", "quoteReply", "readAloud"]
+
+function getPrimaryActions(menu: SelectionMenuState): SelectionAction[] {
+  const ids = menu.source === "assistantReply"
+    ? PRIMARY_ASSISTANT_SELECTION_ACTIONS
+    : PRIMARY_TWEET_SELECTION_ACTIONS[menu.mode]
+  return ids.map((id) => SELECTION_ACTIONS[id])
+}
 
 // ─── 页面组件 ──────────────────────────────────────────────────────────────────
 export default function HomePage() {
@@ -310,6 +328,18 @@ export default function HomePage() {
   // 选区动作菜单：保存选中文本、锚点和菜单展开状态
   const [selectionMenu, setSelectionMenu] = useState<SelectionMenuState | null>(null)
   const [pendingSelectionActionId, setPendingSelectionActionId] = useState<SelectionActionId | null>(null)
+
+  // 查词/句型讲解弹出窗口
+  type LookupPopupState = {
+    text: string
+    actionId: "lookup" | "pattern"
+    anchorX: number
+    anchorY: number
+    prompt: string
+    sceneMeta: { aiRole: string; context: string }
+    tweet: Tweet
+  }
+  const [lookupPopup, setLookupPopup] = useState<LookupPopupState | null>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -1236,19 +1266,33 @@ export default function HomePage() {
     }
 
     if (selection.source === "assistantReply") {
+      if (actionId === "lookup" || actionId === "pattern") {
+        const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text)
+        if (!prompt) return
+        closeSelectionMenu(true)
+        setLookupPopup({
+          text,
+          actionId,
+          anchorX: selection.anchorX,
+          anchorY: selection.anchorY,
+          prompt,
+          sceneMeta: buildSceneMeta(tweet),
+          tweet,
+        })
+        return
+      }
       const quotedSelectionObj: QuotedSelectionState = {
         text,
         sourceRole: "assistant",
         messageIndex: selection.messageIndex ?? messages.length - 1,
         fullMessageContent: selection.fullMessageContent ?? text,
       }
-      if (actionId === "followUp" || actionId === "explainReply" || actionId === "translateReply") {
+      if (actionId === "explainReply" || actionId === "translateReply") {
         const question = buildAssistantDraft(actionId)
         closeSelectionMenu(true)
         if (isMobile) setSheetState("half")
         else if (!effectiveChatOpen) setIsChatOpen(true)
         const displayContent =
-          actionId === "followUp" ? "追问这段" :
           actionId === "explainReply" ? "解释这段" :
           "翻译这段"
         await sendMessage(question, { quotedSelectionOverride: quotedSelectionObj, displayContent })
@@ -1264,12 +1308,38 @@ export default function HomePage() {
     const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text)
     if (!prompt) return
     closeSelectionMenu(true)
-    const displayContent =
-      actionId === "lookup" ? `查词：「${text}」` :
-      actionId === "pattern" ? `句型讲解：「${text}」` :
-      undefined
-    await openChatForSelection(prompt, tweet, displayContent)
-  }, [closeSelectionMenu, effectiveChatOpen, focusChatInput, isMobile, messages.length, openChatForSelection, sendMessage])
+    if (actionId === "lookup" || actionId === "pattern") {
+      setLookupPopup({
+        text,
+        actionId,
+        anchorX: selection.anchorX,
+        anchorY: selection.anchorY,
+        prompt,
+        sceneMeta: buildSceneMeta(tweet),
+        tweet,
+      })
+      return
+    }
+    await openChatForSelection(prompt, tweet, undefined)
+  }, [closeSelectionMenu, effectiveChatOpen, focusChatInput, isMobile, messages.length, openChatForSelection, sendMessage, setLookupPopup])
+
+  const handleLookupFollowUp = useCallback((result: string) => {
+    if (!lookupPopup) return
+    const { text, actionId, tweet } = lookupPopup
+    const displayContent = actionId === "lookup" ? `查词：「${text}」` : `句型讲解：「${text}」`
+    const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text) ?? text
+    setLookupPopup(null)
+    setSelectedTweet(tweet)
+    setMessages([
+      { role: "user", content: prompt, displayContent },
+      { role: "assistant", content: result },
+    ])
+    setInputText("")
+    setQuotedSelection(null)
+    if (isMobile) setSheetState("half")
+    else if (!effectiveChatOpen) setIsChatOpen(true)
+    requestAnimationFrame(() => textareaRef.current?.focus())
+  }, [lookupPopup, isMobile, effectiveChatOpen])
 
   const handleAssistantTextSelect = useCallback((selection: {
     text: string
@@ -1354,13 +1424,7 @@ export default function HomePage() {
   }
 
   const noTransition = !allowChatTransition || isResizing || justRestoredOpenRef.current
-  const primarySelectionActions = selectionMenu
-    ? (
-      selectionMenu.source === "assistantReply"
-        ? PRIMARY_ASSISTANT_SELECTION_ACTIONS
-        : PRIMARY_TWEET_SELECTION_ACTIONS[selectionMenu.mode]
-    ).map((id) => SELECTION_ACTIONS[id])
-    : []
+  const primarySelectionActions = selectionMenu ? getPrimaryActions(selectionMenu) : []
 
   return (
     <div
@@ -1707,6 +1771,20 @@ export default function HomePage() {
         />
       )}
 
+      {/* ── 查词/句型讲解弹出窗口 ── */}
+      {lookupPopup && (
+        <LookupResultPopup
+          text={lookupPopup.text}
+          actionId={lookupPopup.actionId}
+          anchorX={lookupPopup.anchorX}
+          anchorY={lookupPopup.anchorY}
+          prompt={lookupPopup.prompt}
+          sceneMeta={lookupPopup.sceneMeta}
+          onClose={() => setLookupPopup(null)}
+          onFollowUp={handleLookupFollowUp}
+        />
+      )}
+
     </div>
   )
 }
@@ -1739,23 +1817,9 @@ function DetailView({
 }: DetailViewProps) {
   const readSelection = () => {
     if (!onTextSelect) return
-    const sel = window.getSelection()
-    const text = sel?.toString().trim()
-    if (!text || text.length > 800) return
-    try {
-      const range = sel!.getRangeAt(0)
-      const rect = range.getBoundingClientRect()
-      const rects = range.getClientRects()
-      let anchorY = rect.bottom
-      if (rects.length > 0) {
-        let maxBottom = rects[0].bottom
-        for (let i = 1; i < rects.length; i++) {
-          if (rects[i].bottom > maxBottom) maxBottom = rects[i].bottom
-        }
-        anchorY = maxBottom
-      }
-      onTextSelect(text, rect.left + rect.width / 2, anchorY)
-    } catch {}
+    const anchor = readSelectionAnchor({ maxLength: 800 })
+    if (!anchor) return
+    onTextSelect(anchor.text, anchor.anchorX, anchor.anchorY)
   }
 
   const handleMouseUp = () => readSelection()
@@ -1950,24 +2014,10 @@ function TweetCard({
 
   const readSelection = () => {
     if (!onTextSelect) return
-    const sel = window.getSelection()
-    const text = sel?.toString().trim()
-    if (!text || text.length > 800) return
-    try {
-      const range = sel!.getRangeAt(0)
-      const rect = range.getBoundingClientRect()
-      const rects = range.getClientRects()
-      let anchorY = rect.bottom
-      if (rects.length > 0) {
-        let maxBottom = rects[0].bottom
-        for (let i = 1; i < rects.length; i++) {
-          if (rects[i].bottom > maxBottom) maxBottom = rects[i].bottom
-        }
-        anchorY = maxBottom
-      }
-      onTextSelect(text, rect.left + rect.width / 2, anchorY)
-      // 不在此处清除 selection，保持高亮让用户看到选中内容
-    } catch {}
+    const anchor = readSelectionAnchor({ maxLength: 800 })
+    if (!anchor) return
+    onTextSelect(anchor.text, anchor.anchorX, anchor.anchorY)
+    // 不在此处清除 selection，保持高亮让用户看到选中内容
   }
 
   // 桌面端：mouseup 直接读取 selection

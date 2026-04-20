@@ -32,9 +32,11 @@ function smartCase(text: string): string {
 }
 
 function extractSpeakContent(content: string): string {
-  const m = content.match(/\[\s*SPEAK\s*\]([\s\S]*?)\[\s*\/\s*SPEAK\s*\]/i)
-  if (m) return m[1].trim()
-  return content.replace(/\[\s*\/?\s*SPEAK\s*\]/gi, "").trim() || content
+  // Strip [SPEAK] / [/SPEAK] tags but keep all text. The previous behavior of
+  // returning only the SPEAK-wrapped fragment caused the displayed message to
+  // suddenly shrink the moment the closing tag arrived during streaming.
+  const stripped = content.replace(/\[\s*\/?\s*SPEAK\s*\]/gi, "").trim()
+  return stripped || content
 }
 
 function detailSceneMeta(tweet: Tweet) {
