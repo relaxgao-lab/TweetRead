@@ -860,8 +860,8 @@ export default function HomePage() {
     } catch (e) {
       setSearchError(e instanceof Error ? e.message : "搜索失败")
     } finally {
-      setSearchLoading(false)
-      setSearchLoadingMore(false)
+      if (isLoadMore) setSearchLoadingMore(false)
+      else setSearchLoading(false)
     }
   }, [translateTweets])
 

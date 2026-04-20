@@ -109,7 +109,7 @@ export async function fetchUserTweets(userName: string, cursor?: string, forceRe
 
   return {
     tweets: rawTweets.map(parseTweet),
-    hasMore: (data.has_more as boolean | undefined) ?? false,
+    hasMore: (data.has_more as boolean | undefined) ?? !!(data.next_cursor),
     nextCursor: (data.next_cursor as string | undefined) ?? undefined,
   }
 }
@@ -134,7 +134,7 @@ export async function fetchTweetConversation(tweetId: string, cursor?: string): 
 
   return {
     tweets: rawTweets.map(parseTweet),
-    hasMore: (data.has_more as boolean | undefined) ?? false,
+    hasMore: (data.has_more as boolean | undefined) ?? !!(data.next_cursor),
     nextCursor: (data.next_cursor as string | undefined) ?? undefined,
   }
 }
@@ -160,7 +160,7 @@ export async function searchUserTweets(userName: string, query: string, cursor?:
 
   return {
     tweets: rawTweets.map(parseTweet),
-    hasMore: (data.has_more as boolean | undefined) ?? false,
+    hasMore: (data.has_more as boolean | undefined) ?? !!(data.next_cursor),
     nextCursor: (data.next_cursor as string | undefined) ?? undefined,
   }
 }

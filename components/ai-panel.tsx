@@ -1,7 +1,10 @@
 "use client"
 
 import type React from "react"
-import { useRef } from "react"
+import { Fragment, memo, useMemo, useRef } from "react"
+import ReactMarkdown, { type Components } from "react-markdown"
+import remarkGfm from "remark-gfm"
+import remarkBreaks from "remark-breaks"
 import { useAutoScroll } from "@/lib/hooks"
 import Image from "next/image"
 import { ChevronDown, ChevronUp, ExternalLink, Mic, Send, Sparkles, StopCircle, Volume2, X } from "lucide-react"
@@ -111,6 +114,186 @@ function LoadingDots() {
     </span>
   )
 }
+
+const CHIP_OPEN = "\u200B\u200B"
+const CHIP_SEP = "\u200C"
+const CHIP_CLOSE = "\u200B\u200B"
+const CHIP_PATTERN = /\u200B\u200B([^\u200B\u200C]+)\u200C([^\u200B]+)\u200B\u200B/g
+const RAW_CHIP_PATTERN = /\[([^\]\n]{1,80})\]\{([A-Za-z][A-Za-z \-/]{0,40})\}/g
+
+const ROLE_STYLES: Record<string, string> = {
+  subject: "bg-sky-100 text-sky-800 border-sky-200",
+  predicate: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  verb: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  object: "bg-amber-100 text-amber-800 border-amber-200",
+  "direct object": "bg-amber-100 text-amber-800 border-amber-200",
+  "indirect object": "bg-orange-100 text-orange-800 border-orange-200",
+  complement: "bg-orange-100 text-orange-800 border-orange-200",
+  adverbial: "bg-violet-100 text-violet-800 border-violet-200",
+  "adverbial clause": "bg-violet-100 text-violet-800 border-violet-200",
+  adjunct: "bg-violet-100 text-violet-800 border-violet-200",
+  attributive: "bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200",
+  conjunction: "bg-gray-100 text-gray-700 border-gray-200",
+  preposition: "bg-slate-100 text-slate-700 border-slate-200",
+  modifier: "bg-teal-100 text-teal-800 border-teal-200",
+}
+
+function chipClass(role: string): string {
+  const key = role.trim().toLowerCase()
+  return ROLE_STYLES[key] ?? "bg-pink-100 text-pink-800 border-pink-200"
+}
+
+function Chip({ role, children }: { role: string; children: React.ReactNode }) {
+  return (
+    <span
+      className={`inline-flex items-baseline gap-1 px-1.5 py-0.5 mx-0.5 rounded-md border text-[0.88em] leading-tight whitespace-nowrap align-baseline ${chipClass(role)}`}
+      data-chip-role={role}
+    >
+      <span className="font-medium">{children}</span>
+      <span className="text-[0.7em] opacity-70 font-normal">{role.trim()}</span>
+    </span>
+  )
+}
+
+function preprocessChips(md: string): string {
+  return md.replace(RAW_CHIP_PATTERN, (_, text: string, role: string) => {
+    return `${CHIP_OPEN}${role.trim()}${CHIP_SEP}${text}${CHIP_CLOSE}`
+  })
+}
+
+function renderStringWithChips(input: string, keyPrefix: string): React.ReactNode {
+  if (!input.includes(CHIP_OPEN)) return input
+  const parts: React.ReactNode[] = []
+  let lastIndex = 0
+  const re = new RegExp(CHIP_PATTERN.source, "g")
+  let m: RegExpExecArray | null
+  while ((m = re.exec(input)) !== null) {
+    if (m.index > lastIndex) parts.push(input.slice(lastIndex, m.index))
+    parts.push(
+      <Chip key={`${keyPrefix}-${m.index}`} role={m[1]}>
+        {m[2]}
+      </Chip>,
+    )
+    lastIndex = m.index + m[0].length
+  }
+  if (lastIndex < input.length) parts.push(input.slice(lastIndex))
+  return parts
+}
+
+function withChips(children: React.ReactNode, keyPrefix = "c"): React.ReactNode {
+  if (children == null || typeof children === "boolean") return children
+  if (typeof children === "string") return renderStringWithChips(children, keyPrefix)
+  if (Array.isArray(children)) {
+    return children.map((child, i) => {
+      const rendered = withChips(child, `${keyPrefix}-${i}`)
+      if (Array.isArray(rendered)) {
+        return <Fragment key={`${keyPrefix}-${i}`}>{rendered}</Fragment>
+      }
+      return rendered
+    })
+  }
+  return children
+}
+
+const markdownComponents: Components = {
+  p: ({ children }) => (
+    <p className="my-1.5 leading-relaxed first:mt-0 last:mb-0">{withChips(children)}</p>
+  ),
+  h1: ({ children }) => (
+    <h1 className="text-[1.05em] font-semibold text-gray-900 mt-3 mb-1.5 first:mt-0">
+      {withChips(children)}
+    </h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="text-[1em] font-semibold text-gray-900 mt-3 mb-1.5 first:mt-0">
+      {withChips(children)}
+    </h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="text-[0.95em] font-semibold text-gray-900 mt-2 mb-1 first:mt-0">
+      {withChips(children)}
+    </h3>
+  ),
+  h4: ({ children }) => (
+    <h4 className="text-[0.9em] font-semibold text-gray-900 mt-2 mb-1 first:mt-0">
+      {withChips(children)}
+    </h4>
+  ),
+  ul: ({ children }) => (
+    <ul className="my-1.5 pl-5 space-y-1 list-disc marker:text-gray-400">{children}</ul>
+  ),
+  ol: ({ children }) => (
+    <ol className="my-1.5 pl-5 space-y-1 list-decimal marker:text-gray-400">{children}</ol>
+  ),
+  li: ({ children }) => <li className="leading-relaxed">{withChips(children)}</li>,
+  strong: ({ children }) => (
+    <strong className="font-semibold text-gray-900">{withChips(children)}</strong>
+  ),
+  em: ({ children }) => <em className="italic text-gray-700">{withChips(children)}</em>,
+  a: ({ children, href }) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-emerald-600 hover:text-emerald-700 hover:underline"
+    >
+      {withChips(children)}
+    </a>
+  ),
+  code: ({ className, children }) => {
+    const isBlock = typeof className === "string" && className.startsWith("language-")
+    if (isBlock) {
+      return <code className={className}>{children}</code>
+    }
+    return (
+      <code className="px-1 py-0.5 rounded bg-gray-200/70 text-[0.9em] font-mono text-gray-800">
+        {children}
+      </code>
+    )
+  },
+  pre: ({ children }) => (
+    <pre className="my-2 p-2.5 rounded-lg bg-gray-900 text-gray-100 text-sm overflow-x-auto">
+      {children}
+    </pre>
+  ),
+  blockquote: ({ children }) => (
+    <blockquote className="my-2 pl-3 border-l-2 border-gray-300 text-gray-600 italic">
+      {children}
+    </blockquote>
+  ),
+  hr: () => <hr className="my-3 border-t border-gray-200" />,
+  table: ({ children }) => (
+    <div className="my-2 overflow-x-auto">
+      <table className="min-w-full text-sm border border-gray-200 rounded-md overflow-hidden">
+        {children}
+      </table>
+    </div>
+  ),
+  thead: ({ children }) => <thead className="bg-gray-100">{children}</thead>,
+  th: ({ children }) => (
+    <th className="px-2 py-1.5 text-left font-semibold text-gray-800 border-b border-gray-200">
+      {withChips(children)}
+    </th>
+  ),
+  td: ({ children }) => (
+    <td className="px-2 py-1.5 text-gray-700 border-b border-gray-100 align-top">
+      {withChips(children)}
+    </td>
+  ),
+}
+
+const REMARK_PLUGINS = [remarkGfm, remarkBreaks]
+
+export const AssistantMarkdown = memo(function AssistantMarkdown({ text }: { text: string }) {
+  const processed = useMemo(() => preprocessChips(text), [text])
+  return (
+    <div className="assistant-markdown text-base leading-relaxed text-gray-800 break-words">
+      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={markdownComponents}>
+        {processed}
+      </ReactMarkdown>
+    </div>
+  )
+})
 
 function TweetPreview({
   selectedTweet,
@@ -314,7 +497,7 @@ function MessageList({
             ) : (
               <div className="space-y-2">
                 <div
-                  className="rounded-2xl bg-gray-50 border border-gray-100 px-4 py-2 whitespace-pre-wrap select-text"
+                  className="rounded-2xl bg-gray-50 border border-gray-100 px-4 py-2 select-text"
                   onMouseUp={(e) => readAssistantSelection(e.currentTarget, i, msg.content)}
                   onTouchEnd={(e) => {
                     if (variant !== "mobile") return
@@ -322,7 +505,9 @@ function MessageList({
                     requestAnimationFrame(() => readAssistantSelection(container, i, msg.content))
                   }}
                 >
-                  {msg.content ? renderAssistantContent(msg.content) : <LoadingDots />}
+                  {msg.content
+                    ? <AssistantMarkdown text={renderAssistantContent(msg.content)} />
+                    : <LoadingDots />}
                 </div>
                 {i === messages.length - 1 && speechStatus === "speaking" && (
                   <div className="flex items-center gap-2 text-sm text-emerald-600 pt-1">
