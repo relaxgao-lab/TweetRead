@@ -344,7 +344,7 @@ const markdownComponents: Components = {
     </pre>
   ),
   blockquote: ({ children }) => (
-    <blockquote className="my-2 pl-3 border-l-2 border-gray-300 text-gray-600 italic">
+    <blockquote className="my-2 pl-3 pr-2 py-2 border-l-4 border-emerald-400 bg-emerald-50/60 rounded-r-md text-gray-700 not-italic font-mono text-[0.9em]">
       {children}
     </blockquote>
   ),

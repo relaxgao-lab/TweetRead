@@ -71,10 +71,14 @@ export async function streamChatResponse(
 /**
  * Self-contained chat hook for components that manage their own message history
  * (e.g. FloatingChatWindow). Handles streaming, loading state, and abort on unmount.
+ *
+ * `defaultMaxTokens` 会作为该 hook 内所有请求的 max_tokens；单条消息可通过
+ * `sendMessage(..., { maxTokens })` 覆盖。
  */
-export function useChatStream(sceneMeta: SceneMeta) {
+export function useChatStream(sceneMeta: SceneMeta, defaultMaxTokens?: number) {
   const [messages, setMessages] = useState<AiMessage[]>([])
   const [isLoading, setIsLoading] = useState(false)
+  const [chatError, setChatError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   const abort = useCallback(() => {
@@ -86,19 +90,24 @@ export function useChatStream(sceneMeta: SceneMeta) {
     text: string,
     displayContent?: string,
     historyOverride?: AiMessage[],
+    quoted?: { text: string },
+    options?: { maxTokens?: number },
   ) => {
     const trimmed = text.trim()
     if (!trimmed || isLoading) return
 
+    setChatError(null)
     abort()
     const controller = new AbortController()
     abortRef.current = controller
 
     const history = historyOverride ?? messages
-    const userMsg: AiMessage = { role: "user", content: trimmed, displayContent }
+    const userMsg: AiMessage = { role: "user", content: trimmed, displayContent, quoted }
     const nextMessages = [...history, userMsg]
     setMessages(nextMessages)
     setIsLoading(true)
+
+    const effectiveMaxTokens = options?.maxTokens ?? defaultMaxTokens
 
     try {
       await streamChatResponse(
@@ -115,18 +124,19 @@ export function useChatStream(sceneMeta: SceneMeta) {
             return copy
           })
         },
-        { signal: controller.signal },
+        { signal: controller.signal, maxTokens: effectiveMaxTokens },
       )
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
         setIsLoading(false)
+        setChatError((err as Error).message ?? "请求失败，请重试")
       }
     } finally {
       if (abortRef.current === controller) {
         setIsLoading(false)
       }
     }
-  }, [isLoading, messages, sceneMeta, abort])
+  }, [isLoading, messages, sceneMeta, abort, defaultMaxTokens])
 
-  return { messages, setMessages, isLoading, sendMessage, abort }
+  return { messages, setMessages, isLoading, chatError, sendMessage, abort }
 }

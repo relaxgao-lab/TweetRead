@@ -2,6 +2,8 @@ import OpenAI from "openai"
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
+const MODEL_ID = "gpt-5.4-nano-2026-03-17"
+
 interface Message {
   role: "user" | "assistant" | "system"
   content: string
@@ -34,33 +36,48 @@ Guidelines:
 6. If the user pastes a list of replies under the tweet, synthesize main viewpoints and themes; do not quote every reply in full.
 7. Respond in Chinese unless the user explicitly asks for English.`
 
-    const fullMessages: Message[] = [
-      { role: "system", content: systemPrompt },
-      ...(Array.isArray(messages) ? messages.filter((m: Message) => m.role !== "system") : []),
-    ]
+    const filteredMessages = Array.isArray(messages)
+      ? (messages as Message[]).filter((m): m is Message & { role: "user" | "assistant" } => m.role !== "system")
+      : []
 
     const maxOut =
       typeof rawMax === "number" && Number.isFinite(rawMax)
         ? Math.min(Math.max(1, Math.floor(rawMax)), 4000)
-        : 600
+        : 2000
 
+    // gpt-5 / o-series 这类带 reasoning 的模型只认 max_completion_tokens
     const stream = await openai.chat.completions.create({
-      model: "gpt-4.1-mini-2025-04-14",
-      messages: fullMessages,
-      temperature: 0.6,
-      max_tokens: maxOut,
+      model: MODEL_ID,
       stream: true,
+      max_completion_tokens: maxOut,
+      messages: [
+        { role: "system", content: systemPrompt },
+        ...filteredMessages.map((m) => ({ role: m.role, content: m.content })),
+      ],
     })
 
     const encoder = new TextEncoder()
     const readable = new ReadableStream({
       async start(controller) {
+        let truncated = false
         try {
           for await (const chunk of stream) {
-            const delta = chunk.choices[0]?.delta?.content ?? ""
+            const choice = chunk.choices?.[0]
+            const delta = choice?.delta?.content
             if (delta) {
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ delta })}\n\n`))
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify({ delta })}\n\n`)
+              )
             }
+            if (choice?.finish_reason === "length") {
+              truncated = true
+            }
+          }
+          if (truncated) {
+            const notice = "\n\n_（回答已达长度上限，如需继续请回复「继续」或提更具体的问题）_"
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ delta: notice })}\n\n`)
+            )
           }
           controller.enqueue(encoder.encode("data: [DONE]\n\n"))
         } finally {

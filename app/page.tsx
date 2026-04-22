@@ -37,7 +37,14 @@ type TweetCache = Record<string, { tweets: Tweet[]; hasMore: boolean; nextCursor
 type SelectionMode = "wordOrPhrase" | "sentenceOrPassage"
 type SelectionSource = "tweet" | "assistantReply"
 type SelectionActionId = "lookup" | "pattern" | "readAloud" | "explainReply" | "translateReply" | "quoteReply"
-type SelectionAction = { id: SelectionActionId; label: string; buildPrompt?: (text: string) => string; buildDraft?: () => string }
+type SelectionAction = {
+  id: SelectionActionId
+  label: string
+  buildPrompt?: (text: string) => string
+  buildDraft?: () => string
+  /** 该动作触发的 AI 回答所需的 max_tokens 上限（未配置则走服务端默认） */
+  maxTokens?: number
+}
 type SelectionMenuState = {
   text: string
   anchorX: number
@@ -158,17 +165,18 @@ function buildPatternPrompt(text: string): string {
   return `Please analyze the selected sentence comprehensively based on the context: 「${text}」
 
 1. **Sentence Meaning / 句子含义**: Explain the literal meaning of the entire sentence in both English and Chinese.
-2. **Sentence Structure / 句子结构**: Annotate every sentence component using the BILINGUAL annotation format [EnglishWord|中文翻译]{EnglishRole|中文角色}.
-   - Example (write it as a normal paragraph, not inside a code block):
-     [Elon Musk|埃隆·马斯克]{Subject|主语} [snapped|拍下]{Predicate|谓语} [a photo|一张照片]{Object|宾语} [in the garden|在花园里]{Adverbial|状语}
-   - The role part MUST always be bilingual — English and Chinese separated by a single vertical bar "|".
-   - If a word does not need translation (proper nouns, tickers, names), repeat it on both sides: [Elon Musk|Elon Musk], [\\$GLW|\\$GLW].
-   - Components to annotate: Subject/主语, Predicate/谓语, Object/宾语, Attributive/定语, Adverbial/状语, Complement/补语, Clause/从句, Conjunction/连词, Preposition/介词. For subordinate clauses, use descriptive labels like "Adverbial Clause of Reason|原因状语从句", "Attributive Clause|定语从句", etc.
-   - CRITICAL FORMATTING RULES for this section:
-     a. Output the bilingual annotation EXACTLY ONCE, as a single regular paragraph.
-     b. DO NOT wrap the annotation in backticks, inline code, or a fenced code block. Write it as plain prose.
-     c. DO NOT produce a separate "中文标注" line or any duplicate single-language annotation afterwards.
-     d. Separate consecutive chips with a single space only. No comma, no bracket, no backtick.
+2. **Sentence Pattern Mastery / 句型掌握**: Help the user reuse this sentence pattern. Structure this section exactly as follows (use #### subheadings, blockquote for the template, bullet list for examples):
+
+#### 句型骨架 Pattern Template
+> [English template with placeholders in brackets]
+> [对应中文模板，占位符用【】标注]
+
+#### 替换练习 Substitution Practice
+- **例句 1**: [English sentence using the pattern] — [自然中文翻译]
+- **例句 2**: [English sentence using a different subject/context] — [自然中文翻译]
+
+#### 使用场景 Usage Context
+[1–2 sentences: when/where this pattern is used — formal/informal, written/spoken, common domains]
 3. **Key Phrase Analysis / 关键词短语解析**: Explain core phrases (idioms, slang, cultural references) in both English and Chinese.
 4. **Contextual Dialogue / 语境对话**: Provide a realistic dialogue example using this sentence, with both English and Chinese versions.
 
@@ -217,10 +225,10 @@ ${question}`
 }
 
 const SELECTION_ACTIONS: Record<SelectionActionId, SelectionAction> = {
-  lookup: { id: "lookup", label: "查词", buildPrompt: buildLookupPrompt },
-  pattern: { id: "pattern", label: "句型讲解", buildPrompt: buildPatternPrompt },
-  explainReply: { id: "explainReply", label: "解释", buildDraft: () => buildAssistantDraft("explainReply") },
-  translateReply: { id: "translateReply", label: "翻译", buildDraft: () => buildAssistantDraft("translateReply") },
+  lookup: { id: "lookup", label: "查词", buildPrompt: buildLookupPrompt, maxTokens: 1500 },
+  pattern: { id: "pattern", label: "句型讲解", buildPrompt: buildPatternPrompt, maxTokens: 2500 },
+  explainReply: { id: "explainReply", label: "解释", buildDraft: () => buildAssistantDraft("explainReply"), maxTokens: 2000 },
+  translateReply: { id: "translateReply", label: "翻译", buildDraft: () => buildAssistantDraft("translateReply"), maxTokens: 2000 },
   quoteReply: { id: "quoteReply", label: "引用", buildDraft: () => "" },
   readAloud: { id: "readAloud", label: "朗读" },
 }
@@ -333,6 +341,7 @@ export default function HomePage() {
     currentPanelPrompt?: string
     currentPanelDisplayContent?: string
     quotedSelection?: QuotedSelectionState
+    maxTokens?: number
   } | null>(null)
 
   // 浮动独立对话窗口
@@ -342,6 +351,7 @@ export default function HomePage() {
     sceneMeta: { aiRole: string; context: string }
     initialX: number
     initialY: number
+    maxTokens?: number
   } | null>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -1204,11 +1214,11 @@ export default function HomePage() {
     if (clearSelection) window.getSelection()?.removeAllRanges()
   }, [setSelectionMenuPhase, setPendingWindowChoice])
 
-  const openChatForSelection = useCallback((prompt: string, tweet: Tweet, displayContent?: string, alwaysClear = false) => {
+  const openChatForSelection = useCallback((prompt: string, tweet: Tweet, displayContent?: string, alwaysClear = false, maxTokens?: number) => {
     if (isMobile) setSheetState("half")
     else if (!effectiveChatOpen) setIsChatOpen(true)
     setQuotedSelection(null)
-    return sendMessage(prompt, { tweetOverride: tweet, includeQuotedSelection: false, displayContent, alwaysClear })
+    return sendMessage(prompt, { tweetOverride: tweet, includeQuotedSelection: false, displayContent, alwaysClear, maxTokens })
   }, [effectiveChatOpen, isMobile, sendMessage])
 
   const focusChatInput = useCallback(() => {
@@ -1246,7 +1256,7 @@ export default function HomePage() {
         if (!prompt) return
         const displayContent = actionId === "lookup" ? `查词：「${text}」` : `句型讲解：「${text}」`
         setSelectionMenuPhase("windowChoice")
-        setPendingWindowChoice({ prompt, displayContent, tweet, alwaysClear: false })
+        setPendingWindowChoice({ prompt, displayContent, tweet, alwaysClear: false, maxTokens: SELECTION_ACTIONS[actionId].maxTokens })
         return
       }
       if (actionId === "explainReply" || actionId === "translateReply") {
@@ -1269,6 +1279,7 @@ export default function HomePage() {
           currentPanelPrompt: buildAssistantDraft(actionId),
           currentPanelDisplayContent: actionId === "explainReply" ? "解释这段" : "翻译这段",
           quotedSelection: quotedSelectionObj,
+          maxTokens: SELECTION_ACTIONS[actionId].maxTokens,
         })
         return
       }
@@ -1291,12 +1302,12 @@ export default function HomePage() {
       if (!prompt) return
       const displayContent = actionId === "lookup" ? `查词：「${text}」` : `句型讲解：「${text}」`
       setSelectionMenuPhase("windowChoice")
-      setPendingWindowChoice({ prompt, displayContent, tweet, alwaysClear: true })
+      setPendingWindowChoice({ prompt, displayContent, tweet, alwaysClear: true, maxTokens: SELECTION_ACTIONS[actionId].maxTokens })
       return
     }
     await openChatForSelection(
       SELECTION_ACTIONS[actionId].buildPrompt?.(text) ?? text,
-      tweet, undefined, true,
+      tweet, undefined, true, SELECTION_ACTIONS[actionId].maxTokens,
     )
   }, [closeSelectionMenu, effectiveChatOpen, focusChatInput, isMobile, messages.length, openChatForSelection, sendMessage, setSelectionMenuPhase, setPendingWindowChoice])
 
@@ -1732,7 +1743,7 @@ export default function HomePage() {
           loadingActionId={pendingSelectionActionId}
           onAction={(actionId) => {
             if (selectionMenuPhase === "windowChoice" && pendingWindowChoice) {
-              const { prompt, displayContent, tweet, alwaysClear, currentPanelPrompt, currentPanelDisplayContent, quotedSelection } = pendingWindowChoice
+              const { prompt, displayContent, tweet, alwaysClear, currentPanelPrompt, currentPanelDisplayContent, quotedSelection, maxTokens } = pendingWindowChoice
               setSelectionMenuPhase("actions")
               setPendingWindowChoice(null)
               if (actionId === "choiceCurrentPanel") {
@@ -1743,9 +1754,10 @@ export default function HomePage() {
                   void sendMessage(currentPanelPrompt ?? prompt, {
                     quotedSelectionOverride: quotedSelection,
                     displayContent: currentPanelDisplayContent,
+                    maxTokens,
                   })
                 } else {
-                  void openChatForSelection(prompt, tweet, displayContent, alwaysClear)
+                  void openChatForSelection(prompt, tweet, displayContent, alwaysClear, maxTokens)
                 }
               } else if (actionId === "choiceNewWindow") {
                 closeSelectionMenu(true)
@@ -1755,6 +1767,7 @@ export default function HomePage() {
                   sceneMeta: buildSceneMeta(tweet),
                   initialX: selectionMenu.anchorX,
                   initialY: selectionMenu.anchorY,
+                  maxTokens,
                 })
               }
               return
@@ -1775,6 +1788,7 @@ export default function HomePage() {
           sceneMeta={floatingChat.sceneMeta}
           initialX={floatingChat.initialX}
           initialY={floatingChat.initialY}
+          maxTokens={floatingChat.maxTokens}
           onClose={() => setFloatingChat(null)}
         />
       )}
