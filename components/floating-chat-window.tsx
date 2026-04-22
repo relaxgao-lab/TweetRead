@@ -8,8 +8,13 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { useChatStream } from "@/lib/use-chat-stream"
 
-const WINDOW_WIDTH = 380
+const INITIAL_WIDTH = 380
+const INITIAL_HEIGHT = 480
+const MIN_WIDTH = 260
+const MIN_HEIGHT = 240
 const DRAG_THRESHOLD = 4
+
+type ResizeDir = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw"
 
 interface FloatingChatWindowProps {
   initialPrompt: string
@@ -30,6 +35,13 @@ function LoadingDots() {
   )
 }
 
+const RESIZE_CURSORS: Record<ResizeDir, string> = {
+  n: "ns-resize", s: "ns-resize",
+  e: "ew-resize", w: "ew-resize",
+  ne: "nesw-resize", sw: "nesw-resize",
+  nw: "nwse-resize", se: "nwse-resize",
+}
+
 export function FloatingChatWindow({
   initialPrompt,
   displayContent,
@@ -41,26 +53,32 @@ export function FloatingChatWindow({
   const [mounted, setMounted] = useState(false)
   const [inputText, setInputText] = useState("")
   const [position, setPosition] = useState({ x: 0, y: 0 })
+  const [size, setSize] = useState({ width: INITIAL_WIDTH, height: INITIAL_HEIGHT })
   const [isDragging, setIsDragging] = useState(false)
+  const [resizeDir, setResizeDir] = useState<ResizeDir | null>(null)
 
   const { messages, isLoading, sendMessage, abort } = useChatStream(sceneMeta)
 
   const dragStartRef = useRef<{ mouseX: number; mouseY: number; winX: number; winY: number } | null>(null)
   const hasDraggedRef = useRef(false)
+  const resizeStartRef = useRef<{
+    mouseX: number; mouseY: number
+    winX: number; winY: number
+    width: number; height: number
+    dir: ResizeDir
+  } | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const initializedRef = useRef(false)
 
   useEffect(() => setMounted(true), [])
 
-  // Calculate initial position clamped to viewport
   useEffect(() => {
     if (typeof window === "undefined") return
-    const x = Math.max(8, Math.min(initialX - WINDOW_WIDTH / 2, window.innerWidth - WINDOW_WIDTH - 8))
-    const y = Math.max(8, Math.min(initialY + 20, window.innerHeight - 480 - 8))
+    const x = Math.max(8, Math.min(initialX - INITIAL_WIDTH / 2, window.innerWidth - INITIAL_WIDTH - 8))
+    const y = Math.max(8, Math.min(initialY + 20, window.innerHeight - INITIAL_HEIGHT - 8))
     setPosition({ x, y })
   }, [initialX, initialY])
 
-  // Auto-send initial prompt once mounted
   useEffect(() => {
     if (!mounted || initializedRef.current) return
     initializedRef.current = true
@@ -68,10 +86,8 @@ export function FloatingChatWindow({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted])
 
-  // Abort on unmount
   useEffect(() => () => abort(), [abort])
 
-  // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
@@ -87,7 +103,7 @@ export function FloatingChatWindow({
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend() }
   }, [handleSend])
 
-  // Drag
+  // ── Drag ──────────────────────────────────────────────────────────────────
   const handleDragStart = useCallback((clientX: number, clientY: number) => {
     hasDraggedRef.current = false
     dragStartRef.current = { mouseX: clientX, mouseY: clientY, winX: position.x, winY: position.y }
@@ -102,7 +118,7 @@ export function FloatingChatWindow({
       const dy = clientY - dragStartRef.current.mouseY
       if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) hasDraggedRef.current = true
       if (!hasDraggedRef.current) return
-      const newX = Math.max(0, Math.min(dragStartRef.current.winX + dx, window.innerWidth - WINDOW_WIDTH))
+      const newX = Math.max(0, Math.min(dragStartRef.current.winX + dx, window.innerWidth - size.width))
       const newY = Math.max(0, Math.min(dragStartRef.current.winY + dy, window.innerHeight - 60))
       setPosition({ x: newX, y: newY })
     }
@@ -119,14 +135,75 @@ export function FloatingChatWindow({
       document.removeEventListener("touchmove", onTouchMove)
       document.removeEventListener("touchend", stop)
     }
-  }, [isDragging])
+  }, [isDragging, size.width])
+
+  // ── Resize ────────────────────────────────────────────────────────────────
+  const handleResizeStart = useCallback((e: React.MouseEvent, dir: ResizeDir) => {
+    e.preventDefault()
+    e.stopPropagation()
+    resizeStartRef.current = {
+      mouseX: e.clientX, mouseY: e.clientY,
+      winX: position.x, winY: position.y,
+      width: size.width, height: size.height,
+      dir,
+    }
+    setResizeDir(dir)
+  }, [position, size])
+
+  useEffect(() => {
+    if (!resizeDir) return
+    const onMove = (clientX: number, clientY: number) => {
+      const s = resizeStartRef.current
+      if (!s) return
+      const dx = clientX - s.mouseX
+      const dy = clientY - s.mouseY
+
+      let newW = s.width, newH = s.height, newX = s.winX, newY = s.winY
+
+      if (s.dir.includes("e")) newW = Math.max(MIN_WIDTH, s.width + dx)
+      if (s.dir.includes("w")) { newW = Math.max(MIN_WIDTH, s.width - dx); newX = s.winX + s.width - newW }
+      if (s.dir.includes("s")) newH = Math.max(MIN_HEIGHT, s.height + dy)
+      if (s.dir.includes("n")) { newH = Math.max(MIN_HEIGHT, s.height - dy); newY = s.winY + s.height - newH }
+
+      setSize({ width: newW, height: newH })
+      setPosition({ x: newX, y: newY })
+    }
+    const onMouseMove = (e: MouseEvent) => onMove(e.clientX, e.clientY)
+    const stop = () => { setResizeDir(null); resizeStartRef.current = null }
+    document.addEventListener("mousemove", onMouseMove)
+    document.addEventListener("mouseup", stop)
+    return () => {
+      document.removeEventListener("mousemove", onMouseMove)
+      document.removeEventListener("mouseup", stop)
+    }
+  }, [resizeDir])
+
+  // ── Resize handle helper ─────────────────────────────────────────────────
+  const rh = (dir: ResizeDir, className: string) => (
+    <div
+      className={`absolute z-10 ${className}`}
+      style={{ cursor: RESIZE_CURSORS[dir] }}
+      onMouseDown={(e) => handleResizeStart(e, dir)}
+    />
+  )
 
   const el = (
     <div
       data-floating-chat
       className="fixed z-[400] flex flex-col bg-white rounded-2xl shadow-2xl border border-gray-200/80 overflow-hidden"
-      style={{ left: position.x, top: position.y, width: WINDOW_WIDTH }}
+      style={{ left: position.x, top: position.y, width: size.width, height: size.height }}
     >
+      {/* Resize handles — edges */}
+      {rh("n",  "top-0 left-2 right-2 h-1")}
+      {rh("s",  "bottom-0 left-2 right-2 h-1")}
+      {rh("e",  "right-0 top-2 bottom-2 w-1")}
+      {rh("w",  "left-0 top-2 bottom-2 w-1")}
+      {/* Resize handles — corners */}
+      {rh("ne", "top-0 right-0 w-3 h-3")}
+      {rh("nw", "top-0 left-0 w-3 h-3")}
+      {rh("se", "bottom-0 right-0 w-3 h-3")}
+      {rh("sw", "bottom-0 left-0 w-3 h-3")}
+
       {/* Title bar — drag handle */}
       <div
         className="flex items-center justify-between gap-2 px-4 py-2.5 bg-gray-50 border-b border-gray-100 shrink-0 select-none cursor-grab active:cursor-grabbing"
@@ -145,7 +222,7 @@ export function FloatingChatWindow({
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-3" style={{ maxHeight: 320 }}>
+      <div className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0">
         {messages.map((msg, i) => (
           <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
             {msg.role === "user" ? (
