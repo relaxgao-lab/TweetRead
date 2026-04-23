@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { Fragment, memo, useMemo, useRef } from "react"
+import { Fragment, memo, useCallback, useMemo, useRef } from "react"
 import ReactMarkdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkBreaks from "remark-breaks"
@@ -480,9 +480,19 @@ function MessageList({
   onAssistantTextSelect: (selection: AssistantSelectionPayload) => void
 }) {
   const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const userMessageRefs = useRef<Record<number, HTMLDivElement | null>>({})
   useSelectionScrollLock(scrollContainerRef)
-  const { userScrolledUp, scrollToBottom } = useAutoScroll(scrollContainerRef, messagesEndRef, messages)
-  const showScrollButton = userScrolledUp && isChatLoading
+  const getUserMessageNode = useCallback(
+    (messageIndex: number) => userMessageRefs.current[messageIndex] ?? null,
+    [],
+  )
+  const { userScrolledUp, latestTurnMode, hasNewMessage, spacerRef, scrollToBottom } = useAutoScroll(
+    scrollContainerRef,
+    messagesEndRef,
+    messages,
+    { getUserMessageNode },
+  )
+  const showScrollButton = (userScrolledUp || latestTurnMode) && hasNewMessage
 
   const readAssistantSelection = (
     container: HTMLDivElement | null,
@@ -510,7 +520,7 @@ function MessageList({
           className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white border border-gray-200 shadow-md text-sm text-gray-600 hover:bg-gray-50 transition-colors"
         >
           <ChevronDown className="h-3.5 w-3.5" />
-          新消息
+          新消息 / 回到底部
         </button>
       )}
     <div
@@ -540,7 +550,13 @@ function MessageList({
       )}
 
       {messages.map((msg, i) => (
-        <div key={i} className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
+        <div
+          key={i}
+          ref={(node) => {
+            if (msg.role === "user") userMessageRefs.current[i] = node
+          }}
+          className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}
+        >
           {msg.role === "user" && (
             <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium bg-violet-500 text-white">
               我
@@ -620,6 +636,7 @@ function MessageList({
         </div>
       )}
 
+      <div ref={spacerRef} aria-hidden style={{ height: 0, marginTop: 0 }} />
       <div ref={messagesEndRef} />
     </div>
     </div>

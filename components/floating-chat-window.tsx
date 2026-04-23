@@ -2,10 +2,11 @@
 
 import React, { useEffect, useRef, useState, useCallback } from "react"
 import { createPortal } from "react-dom"
-import { Mic, Send, StopCircle, X } from "lucide-react"
+import { ChevronDown, Mic, Send, StopCircle, X } from "lucide-react"
 import { AssistantMarkdown } from "@/components/ai-panel"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+import { useAutoScroll } from "@/lib/hooks"
 import { useChatStream } from "@/lib/use-chat-stream"
 import { readSelectionAnchor } from "@/lib/selection"
 import { WhisperSpeechService } from "@/app/conversation/whisper-speech-service"
@@ -84,6 +85,7 @@ export function FloatingChatWindow({
   } | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const userMessageRefs = useRef<Record<number, HTMLDivElement | null>>({})
   const initializedRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -105,9 +107,18 @@ export function FloatingChatWindow({
 
   useEffect(() => () => abort(), [abort])
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages])
+  const getUserMessageNode = useCallback(
+    (messageIndex: number) => userMessageRefs.current[messageIndex] ?? null,
+    [],
+  )
+
+  const { userScrolledUp, latestTurnMode, hasNewMessage, spacerRef, scrollToBottom } = useAutoScroll(
+    messagesContainerRef,
+    messagesEndRef,
+    messages,
+    { getUserMessageNode },
+  )
+  const showScrollButton = (userScrolledUp || latestTurnMode) && hasNewMessage
 
   // ── Voice service setup ───────────────────────────────────────────────────
   useEffect(() => {
@@ -285,50 +296,71 @@ export function FloatingChatWindow({
       </div>
 
       {/* Messages */}
-      <div
-        ref={messagesContainerRef}
-        className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0"
-      >
-        {messages.map((msg, i) => (
-          <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-            {msg.role === "user" ? (
-              <div className="inline-block max-w-[85%] rounded-2xl bg-violet-50 border border-violet-100 overflow-hidden text-left">
-                {msg.quoted && (
-                  <div className="border-b border-violet-100 bg-violet-50/70 px-3 py-2">
-                    <p className="text-xs leading-relaxed text-violet-700 line-clamp-2 whitespace-pre-wrap break-words">
-                      {msg.quoted.text}
-                    </p>
+      <div className="relative flex-1 min-h-0">
+        {showScrollButton && (
+          <button
+            type="button"
+            onClick={scrollToBottom}
+            className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white border border-gray-200 shadow-md text-xs text-gray-600 hover:bg-gray-50 transition-colors"
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+            新消息 / 回到底部
+          </button>
+        )}
+        <div
+          ref={messagesContainerRef}
+          className="h-full overflow-y-auto p-3 space-y-3 min-h-0"
+        >
+          {messages.map((msg, i) => (
+            <div
+              key={i}
+              ref={(node) => {
+                if (msg.role === "user") userMessageRefs.current[i] = node
+              }}
+              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+            >
+              {msg.role === "user" ? (
+                <div className="inline-block max-w-[85%] rounded-2xl bg-violet-50 border border-violet-100 overflow-hidden text-left">
+                  {msg.quoted && (
+                    <div className="border-b border-violet-100 bg-violet-50/70 px-3 py-2">
+                      <p className="text-xs leading-relaxed text-violet-700 line-clamp-2 whitespace-pre-wrap break-words">
+                        {msg.quoted.text}
+                      </p>
+                    </div>
+                  )}
+                  <div className="px-3 py-2 text-sm text-gray-900">
+                    {msg.displayContent ?? msg.content}
                   </div>
-                )}
-                <div className="px-3 py-2 text-sm text-gray-900">
-                  {msg.displayContent ?? msg.content}
                 </div>
+              ) : (
+                <div
+                  className="rounded-2xl bg-gray-50 border border-gray-100 px-3 py-2 text-sm w-full select-text"
+                  onMouseUp={handleAssistantMouseUp}
+                >
+                  {msg.content ? <AssistantMarkdown text={msg.content} /> : <LoadingDots />}
+                </div>
+              )}
+            </div>
+          ))}
+          {isLoading && (
+            <div className="flex justify-start">
+              <div className="rounded-2xl bg-gray-50 border border-gray-100 px-3 py-2 text-sm">
+                <LoadingDots />
               </div>
-            ) : (
+            </div>
+          )}
+          {chatError && (
+            <div className="flex justify-start">
               <div
-                className="rounded-2xl bg-gray-50 border border-gray-100 px-3 py-2 text-sm w-full select-text"
-                onMouseUp={handleAssistantMouseUp}
+                className="rounded-2xl bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700"
               >
-                {msg.content ? <AssistantMarkdown text={msg.content} /> : <LoadingDots />}
+                {chatError}
               </div>
-            )}
-          </div>
-        ))}
-        {isLoading && (
-          <div className="flex justify-start">
-            <div className="rounded-2xl bg-gray-50 border border-gray-100 px-3 py-2 text-sm">
-              <LoadingDots />
             </div>
-          </div>
-        )}
-        {chatError && (
-          <div className="flex justify-start">
-            <div className="rounded-2xl bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
-              {chatError}
-            </div>
-          </div>
-        )}
-        <div ref={messagesEndRef} />
+          )}
+          <div ref={spacerRef} aria-hidden style={{ height: 0, marginTop: 0 }} />
+          <div ref={messagesEndRef} />
+        </div>
       </div>
 
       {/* Input */}
