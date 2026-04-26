@@ -1,13 +1,12 @@
 "use client"
 
-import type React from "react"
-import { Fragment, memo, useCallback, useMemo, useRef } from "react"
+import React, { Fragment, createContext, memo, useCallback, useContext, useMemo, useRef } from "react"
 import ReactMarkdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkBreaks from "remark-breaks"
 import { useAutoScroll } from "@/lib/hooks"
 import Image from "next/image"
-import { ChevronDown, ChevronUp, ExternalLink, Mic, Send, Sparkles, StopCircle, Volume2, X } from "lucide-react"
+import { ChevronDown, ChevronUp, ExternalLink, Loader2, Mic, Send, Sparkles, StopCircle, Volume2, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -123,7 +122,14 @@ const CHIP_CLOSE = "\u200B\u200B"
 const CHIP_PATTERN = /\u200B\u200B([^\u200B-\u200E]*)\u200C([^\u200B-\u200E]*)\u200D([^\u200B-\u200E]*)\u200E([^\u200B-\u200E]*)\u200B\u200B/g
 const RAW_CHIP_PATTERN = /\[([^\]\n]{1,160})\]\{([A-Za-z\u4e00-\u9fa5][^\}\n]{0,80})\}/g
 
+export const SynonymClickContext = createContext<((word: string) => void) | null>(null)
+
+const SYNONYM_ROLES = new Set(["synonym", "近义词", "同义词"])
+
 const ROLE_STYLES: Record<string, string> = {
+  synonym: "bg-teal-50 text-teal-800 border-teal-300",
+  近义词: "bg-teal-50 text-teal-800 border-teal-300",
+  同义词: "bg-teal-50 text-teal-800 border-teal-300",
   subject: "bg-sky-100 text-sky-800 border-sky-200",
   主语: "bg-sky-100 text-sky-800 border-sky-200",
   predicate: "bg-emerald-100 text-emerald-800 border-emerald-200",
@@ -199,7 +205,23 @@ function Chip({
   textEn: string
   textZh: string
 }) {
+  const onSynonymClick = useContext(SynonymClickContext)
   const styleKey = roleEn || roleZh
+  const isSynonym = SYNONYM_ROLES.has(styleKey.toLowerCase()) || SYNONYM_ROLES.has(styleKey)
+
+  if (isSynonym) {
+    return (
+      <button
+        type="button"
+        onClick={() => onSynonymClick?.(textEn)}
+        className={`inline-flex items-center gap-1 px-2.5 py-0.5 mx-0.5 my-0.5 rounded-full border text-[0.88em] font-medium leading-tight whitespace-nowrap align-baseline transition-colors ${chipClass(styleKey)} ${onSynonymClick ? "cursor-pointer hover:bg-teal-100 active:scale-95" : "cursor-default"}`}
+      >
+        {textEn}
+        {onSynonymClick && <span className="text-[0.8em] opacity-60">↗</span>}
+      </button>
+    )
+  }
+
   const showTextZh = textZh && textZh !== textEn
   const showRoleZh = roleZh && roleEn.toLowerCase() !== roleZh.toLowerCase()
   return (
@@ -788,7 +810,7 @@ function ChatInput({
             placeholder={selectedTweet
               ? (variant === "desktop" ? "输入或语音...（Shift+Enter 换行）" : "输入或语音...")
               : (variant === "desktop" ? "请先点击左侧推文..." : "请先点击推文...")}
-            disabled={inputBusy || !selectedTweet || speechStatus === "processing"}
+            disabled={inputBusy || !selectedTweet || speechStatus === "processing" || speechStatus === "preparing"}
             className="block w-full min-h-[44px] max-h-[120px] text-base resize-none pt-2.5 px-3 border-0 focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent placeholder:text-gray-400"
             rows={1}
           />
@@ -798,12 +820,14 @@ function ChatInput({
               size="icon"
               variant="ghost"
               onClick={onVoiceToggle}
-              disabled={inputBusy || !selectedTweet || speechStatus === "processing"}
+              disabled={inputBusy || !selectedTweet || speechStatus === "processing" || speechStatus === "preparing"}
               className="h-8 w-8 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-md disabled:opacity-50 transition-colors"
-              title={speechStatus === "recording" ? "停止录音" : "语音输入"}
+              title={speechStatus === "recording" ? "停止录音" : speechStatus === "preparing" ? "准备中…" : "语音输入"}
             >
               {speechStatus === "recording"
                 ? <StopCircle className="h-4 w-4 text-red-500" />
+                : speechStatus === "preparing"
+                ? <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
                 : <Mic className="h-4 w-4" />}
             </Button>
             <Button

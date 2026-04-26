@@ -1,8 +1,12 @@
 import { AudioRecorder } from './audio-recorder-service'
 import { initSpeechSynthesis } from './speech-utils'
 import { TTS_PROVIDER } from '@/config'
+import { buildCacheKey, getCachedAudio, setCachedAudio } from '@/lib/audio-cache'
 
-export type SpeechStatus = 'idle' | 'recording' | 'processing' | 'speaking'
+// In-flight deduplication: prevents duplicate API calls for identical concurrent requests
+const inFlight = new Map<string, Promise<Blob>>()
+
+export type SpeechStatus = 'idle' | 'preparing' | 'recording' | 'processing' | 'speaking'
 
 interface WhisperSpeechServiceConfig {
   onStatusChange?: (status: SpeechStatus) => void
@@ -50,6 +54,7 @@ export class WhisperSpeechService {
   async startListening(): Promise<void> {
     if (this.status !== 'idle') return
     await this.stopSpeaking()
+    this.setStatus('preparing')
     try {
       await this.recorder.start({})
       this.setStatus('recording')
@@ -173,17 +178,41 @@ export class WhisperSpeechService {
   private async _speakOpenAI(text: string): Promise<void> {
     let audio: HTMLAudioElement | null = null
     let audioUrl: string | null = null
+    const voice = 'alloy'
+    const speed = 1.0
+    const cacheKey = buildCacheKey(text, voice, speed)
+
     try {
-      const res = await fetch('/api/openai-tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, model: 'tts-1', voice: 'alloy', response_format: 'mp3' }),
-      })
-      if (!res.ok) {
-        const errorText = await res.text()
-        throw new Error(errorText || 'Failed to generate audio')
+      // Resolve blob: cache hit → instant, cache miss → API call (deduplicated)
+      let blobPromise: Promise<Blob>
+      const cached = await getCachedAudio(cacheKey, text)
+      if (cached) {
+        console.log('[TTS cache] HIT', cacheKey)
+        blobPromise = Promise.resolve(cached)
+      } else if (inFlight.has(cacheKey)) {
+        blobPromise = inFlight.get(cacheKey)!
+      } else {
+        console.log('[TTS cache] MISS — fetching API', cacheKey)
+        blobPromise = fetch('/api/openai-tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, model: 'tts-1', voice, response_format: 'mp3' }),
+        }).then(async (res) => {
+          if (!res.ok) {
+            const errorText = await res.text()
+            throw new Error(errorText || 'Failed to generate audio')
+          }
+          const blob = await res.blob()
+          setCachedAudio(cacheKey, blob).catch((err) =>
+            console.error('[TTS cache] Failed to persist audio to cache:', err)
+          )
+          return blob
+        })
+        inFlight.set(cacheKey, blobPromise)
+        blobPromise.finally(() => inFlight.delete(cacheKey))
       }
-      const blob = await res.blob()
+
+      const blob = await blobPromise
       audioUrl = URL.createObjectURL(blob)
       audio = new Audio(audioUrl)
       this.currentOpenAIAudio = audio

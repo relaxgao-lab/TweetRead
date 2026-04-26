@@ -15,7 +15,7 @@ export async function POST(request: Request) {
       try {
         await Promise.all(items.map(async (item, idx) => {
           const completion = await openai.chat.completions.create({
-            model: "gpt-4.1-mini-2025-04-14",
+            model: "gpt-5.4-nano-2026-03-17",
             messages: [
               {
                 role: "user",

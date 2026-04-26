@@ -2,8 +2,9 @@
 
 import React, { useEffect, useRef, useState, useCallback } from "react"
 import { createPortal } from "react-dom"
-import { ChevronDown, Mic, Send, StopCircle, X } from "lucide-react"
-import { AssistantMarkdown } from "@/components/ai-panel"
+import { ChevronDown, Loader2, Mic, Send, StopCircle, X } from "lucide-react"
+import { AssistantMarkdown, SynonymClickContext } from "@/components/ai-panel"
+import { buildLookupPrompt } from "@/lib/prompts"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { useAutoScroll } from "@/lib/hooks"
@@ -163,6 +164,11 @@ export function FloatingChatWindow({
     return () => document.removeEventListener("mousedown", dismiss)
   }, [pendingQuote])
 
+  // ── Synonym chip click ────────────────────────────────────────────────────
+  const handleSynonymClick = useCallback((word: string) => {
+    sendMessage(buildLookupPrompt(word), `查词：「${word}」`)
+  }, [sendMessage])
+
   // ── Send ──────────────────────────────────────────────────────────────────
   const handleSend = useCallback(() => {
     const trimmed = inputText.trim()
@@ -174,7 +180,7 @@ export function FloatingChatWindow({
   }, [inputText, isLoading, quotedSelection, sendMessage])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend() }
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); handleSend() }
   }, [handleSend])
 
   // ── Drag ──────────────────────────────────────────────────────────────────
@@ -296,6 +302,7 @@ export function FloatingChatWindow({
       </div>
 
       {/* Messages */}
+      <SynonymClickContext.Provider value={handleSynonymClick}>
       <div className="relative flex-1 min-h-0">
         {showScrollButton && (
           <button
@@ -362,6 +369,7 @@ export function FloatingChatWindow({
           <div ref={messagesEndRef} />
         </div>
       </div>
+      </SynonymClickContext.Provider>
 
       {/* Input */}
       <div className="shrink-0 border-t border-gray-100 p-2.5 bg-gray-50/80">
@@ -397,7 +405,7 @@ export function FloatingChatWindow({
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="继续追问…"
-            disabled={isLoading || speechStatus === "processing"}
+            disabled={isLoading || speechStatus === "processing" || speechStatus === "preparing"}
             rows={1}
             className="flex-1 min-h-[32px] max-h-[96px] text-sm resize-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent placeholder:text-gray-400 py-1 px-0"
           />
@@ -405,12 +413,14 @@ export function FloatingChatWindow({
             type="button"
             size="icon"
             onClick={handleVoiceToggle}
-            disabled={isLoading || speechStatus === "processing"}
+            disabled={isLoading || speechStatus === "processing" || speechStatus === "preparing"}
             className="h-7 w-7 mb-0.5 shrink-0 bg-transparent hover:bg-gray-100 text-gray-500 hover:text-gray-700 rounded-md disabled:opacity-50 shadow-none border-0"
-            title={speechStatus === "recording" ? "停止录音" : "语音输入"}
+            title={speechStatus === "recording" ? "停止录音" : speechStatus === "preparing" ? "准备中…" : "语音输入"}
           >
             {speechStatus === "recording"
               ? <StopCircle className="h-4 w-4 text-red-500" />
+              : speechStatus === "preparing"
+              ? <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
               : <Mic className="h-4 w-4" />}
           </Button>
           <Button

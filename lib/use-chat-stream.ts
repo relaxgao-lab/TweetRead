@@ -109,9 +109,18 @@ export function useChatStream(sceneMeta: SceneMeta, defaultMaxTokens?: number) {
 
     const effectiveMaxTokens = options?.maxTokens ?? defaultMaxTokens
 
+    // When a quoted selection exists, inject the quoted text into the API message so the AI has context
+    const apiContent = quoted
+      ? `以下内容来自你之前的一条回复，请结合该引用上下文回答我的问题。\n\n引用片段：\n「${quoted.text}」\n\n我的问题：${trimmed}`
+      : trimmed
+    const apiMessages = [
+      ...history.map((m) => ({ role: m.role, content: m.content })),
+      { role: "user" as const, content: apiContent },
+    ]
+
     try {
       await streamChatResponse(
-        nextMessages.map((m) => ({ role: m.role, content: m.content })),
+        apiMessages,
         sceneMeta,
         () => {
           setIsLoading(false)

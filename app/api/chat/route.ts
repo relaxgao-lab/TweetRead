@@ -22,17 +22,17 @@ export async function POST(request: Request) {
       return new Response(JSON.stringify({ error: "Missing sceneMeta" }), { status: 400 })
     }
 
-    const systemPrompt = `You are ${sceneMeta.aiRole}. Your job is to help the user understand the following tweet content.
+    const systemPrompt = `You are ${sceneMeta.aiRole}.
 
-Tweet content:
+Tweet content (for reference):
 ${sceneMeta.context}
 
 Guidelines:
-1. Be concise and helpful. Answer directly.
+1. Be concise and helpful. Answer directly to what the user is asking.
 2. When explaining background or context, use clear and simple language.
 3. If asked to translate, translate accurately and naturally into Chinese.
 4. If asked to summarize, highlight the key points.
-5. Always stay focused on the tweet content provided.
+5. Focus on the user's actual request. If the user's message includes a "Source tweet" context block, use it to understand the meaning accurately — but keep your analysis focused on the selected text, not the entire tweet.
 6. If the user pastes a list of replies under the tweet, synthesize main viewpoints and themes; do not quote every reply in full.
 7. Respond in Chinese unless the user explicitly asks for English.`
 

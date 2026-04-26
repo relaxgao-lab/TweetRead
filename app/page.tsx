@@ -2,10 +2,11 @@
 
 import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react"
 import Image from "next/image"
-import { AiPanel, type AiMessage } from "@/components/ai-panel"
+import { AiPanel, SynonymClickContext, type AiMessage } from "@/components/ai-panel"
 import { SelectionActionMenu } from "@/components/selection-action-menu"
 import { FloatingChatWindow } from "@/components/floating-chat-window"
 import { streamChatResponse } from "@/lib/use-chat-stream"
+import { isWordOrPhraseLookup, buildLookupPrompt } from "@/lib/prompts"
 import { ACCOUNTS } from "@/config/accounts"
 import type { Tweet } from "@/lib/twitter"
 import { formatRelativeTime, formatCount } from "@/lib/twitter"
@@ -36,11 +37,11 @@ type SheetState = "hidden" | "half" | "full"
 type TweetCache = Record<string, { tweets: Tweet[]; hasMore: boolean; nextCursor?: string; loadedAt: number }>
 type SelectionMode = "wordOrPhrase" | "sentenceOrPassage"
 type SelectionSource = "tweet" | "assistantReply"
-type SelectionActionId = "lookup" | "pattern" | "readAloud" | "explainReply" | "translateReply" | "quoteReply"
+type SelectionActionId = "lookup" | "pattern" | "patternMastery" | "readAloud" | "explainReply" | "translateReply" | "quoteReply"
 type SelectionAction = {
   id: SelectionActionId
   label: string
-  buildPrompt?: (text: string) => string
+  buildPrompt?: (text: string, tweetContext?: string) => string
   buildDraft?: () => string
   /** 该动作触发的 AI 回答所需的 max_tokens 上限（未配置则走服务端默认） */
   maxTokens?: number
@@ -103,84 +104,64 @@ function smartCase(text: string): string {
   return text.toLowerCase().replace(/\b[a-z]/g, c => c.toUpperCase())
 }
 
-function isWordOrPhraseLookup(text: string): boolean {
-  const normalized = text.trim().replace(/\s+/g, " ")
-  if (!normalized) return true
-
-  const wordCount = normalized.split(" ").length
-  const hasStrongSentencePunctuation = /[.!?;:]/.test(normalized)
-  const hasClauseSignal = /,|\bthat\b|\bwhich\b|\bwho\b|\bwhen\b|\bwhile\b|\bif\b|\bbecause\b|\bbut\b|\band\b/i.test(normalized)
-
-  return wordCount <= 4 && !hasStrongSentencePunctuation && !hasClauseSignal
-}
-
 function getSelectionMode(text: string): SelectionMode {
-  return isWordOrPhraseLookup(text) ? "wordOrPhrase" : "sentenceOrPassage"
+  return isWordOrPhraseLookup(text) ? 'wordOrPhrase' : 'sentenceOrPassage'
 }
 
-function buildLookupPrompt(text: string): string {
-  if (getSelectionMode(text) === "wordOrPhrase") {
-    return `请解释我在【这段文字】里选中的这个英文单词或短语：「${text}」
+/** Shared spec for 句型掌握 output (used by full 句型讲解 and standalone 句型掌握 action). */
+const PATTERN_MASTERY_OUTPUT_SPEC = `Help the user truly internalize and reuse this sentence pattern. Structure the response exactly as follows (use #### subheadings, blockquote for the template, bullet list for examples):
 
-这次请使用“英语词典讲解”风格，目标是帮助中文用户真正学会它，而不是只看中文翻译。
-
-请严格按以下顺序，尽量简洁：
-
-1. 原词 / 原短语：原样写出，标注音标（IPA，如 /ˈeksəmpəl/），并标注词性（n. / v. / adj. 等）
-2. 语境义：它在这段文字里的自然含义
-3. 用法提示：语气、搭配、感情色彩、隐含意思，或为什么这样用
-4. 常见误区：容易按字面误解，或容易和别的表达混淆时提醒
-5. 可替换表达：1～2个这个语境里可替换的英文表达
-6. 英文例句：1个简短自然的例句（15词以内），附中文翻译
-
-补充要求：
-- 回答主体用中文，保留关键英文表达
-- 单词或短语必须标注音标（IPA），方便用户知道如何发音
-- 如果是俚语、缩写、梗、固定搭配或带语气的说法，直接点明
-- 不要展开成长篇文章，像老师讲词汇重点一样简洁
-- 不要脱离当前文字语境，不要只给词典式死定义`
-  }
-
-  return `请解释我在这条推文里选中的这句或这段英文：「${text}」。
-
-这次请使用“英语精读拆解”风格，目标是帮助中文用户真正读懂句子结构、语气和表达方式，而不是只给整句翻译。
-
-请严格按这个顺序组织，尽量简洁：
-1. 原句 / 原文：原样写出
-2. 整体句意：先用自然中文说清整句在这条推文里的意思
-3. 精读拆解：按意群或短语分块解释，每一块都说明它在这里表达什么
-4. 表达重点：指出这句里最值得学习的 1 到 3 个表达、搭配或句式
-5. 语气 / 弦外之音：如果有强调、调侃、反讽、省略、口语感、网络语气，也说明一下
-6. 学习收获：最后用一句话总结“这句英文最值得记住的地方”
-
-补充要求：
-- 回答主体用中文，但保留关键英文表达
-- 不要逐词硬译，要优先解释真实语境
-- 如果字面义和真实语境义不同，要点明
-- 不要长篇大论，像老师带着学生做一句精读
-- 不要脱离当前推文语境`
-}
-
-function buildPatternPrompt(text: string): string {
-  return `Please analyze the selected sentence comprehensively based on the context: 「${text}」
-
-1. **Sentence Meaning / 句子含义**: Explain the literal meaning of the entire sentence in both English and Chinese.
-2. **Sentence Pattern Mastery / 句型掌握**: Help the user reuse this sentence pattern. Structure this section exactly as follows (use #### subheadings, blockquote for the template, bullet list for examples):
+#### 原句翻译 Translation
+> [原句 original sentence]
+> [地道中文翻译 — 不要直译，翻出语气和语境]
 
 #### 句型骨架 Pattern Template
 > [English template with placeholders in brackets]
 > [对应中文模板，占位符用【】标注]
 
-#### 替换练习 Substitution Practice
-- **例句 1**: [English sentence using the pattern] — [自然中文翻译]
-- **例句 2**: [English sentence using a different subject/context] — [自然中文翻译]
+#### 关键表达说明 Key Expressions
+For each non-obvious word, phrase, abbreviation, contraction, or idiom in the selected text, add one bullet:
+- **[expression]**: [what it actually means here — explain idioms, slang, domain jargon, abbreviations like YTD/P/E, and culturally loaded phrases plainly; do NOT skip this if the expression could be misread literally]
+- For contractions (e.g. Everyone's, it's, they're), always expand them: write "[word] = [full form]" (e.g. "Everyone's = Everyone is — NOT the possessive 'Everyone's book'") so learners are never left guessing whether it is a contraction or possessive.
 
-#### 使用场景 Usage Context
-[1–2 sentences: when/where this pattern is used — formal/informal, written/spoken, common domains]
+#### 语体风格 Register & Style
+[One sentence: be explicit about register — is this Twitter/social-media casual, financial jargon, formal English, or spoken slang? State clearly whether a learner should use this in formal writing or only in specific contexts.]
+
+#### 替换练习 Substitution Practice
+Both examples must change the subject AND the action/domain — do NOT just swap names or ticker symbols:
+- **例句 1**: *[English sentence]* — [自然中文翻译]
+- **例句 2**: *[English sentence in a clearly different context/domain]* — [自然中文翻译]
+
+#### 你来试试 Your Turn
+[In Chinese: Give the user one specific fill-in challenge — name a real-world scenario they could describe with this pattern, and invite them to write their own sentence. Example style: "现在轮到你了：用这个句型描述一件最近发生的事，写一句话试试？"]`
+
+function buildPatternPrompt(text: string, tweetContext?: string): string {
+  const ctxBlock = tweetContext
+    ? `\nSource tweet (use as context to interpret the selected text accurately):\n「${tweetContext}」\n`
+    : ""
+  return `${ctxBlock}Please analyze the selected sentence comprehensively based on the context: 「${text}」
+
+1. **Sentence Meaning / 句子含义**: Explain the literal meaning of the entire sentence in both English and Chinese.
+2. **Sentence Pattern Mastery / 句型掌握**: ${PATTERN_MASTERY_OUTPUT_SPEC}
 3. **Key Phrase Analysis / 关键词短语解析**: Explain core phrases (idioms, slang, cultural references) in both English and Chinese.
 4. **Contextual Dialogue / 语境对话**: Provide a realistic dialogue example using this sentence, with both English and Chinese versions.
 
 **Formatting**: Use clean Markdown — headings, bullet lists, and bold emphasis are encouraged. Code blocks are only for actual code; never use them for annotations or regular sentences. Keep explanations concise.`
+}
+
+function buildPatternMasteryPrompt(text: string, tweetContext?: string): string {
+  const ctxBlock = tweetContext
+    ? `\nSource tweet (use as context to interpret meaning — do not expand the pattern beyond the selected text):\n「${tweetContext}」\n`
+    : ""
+  return `${ctxBlock}Please analyze ONLY this selected excerpt for sentence pattern mastery: 「${text}」
+
+IMPORTANT: Derive the pattern template directly from the selected text above. Use the provided tweet context only to understand the meaning accurately — the pattern should still be grounded in 「${text}」 itself.
+
+${PATTERN_MASTERY_OUTPUT_SPEC}
+
+Do not add separate sections for full-sentence paraphrase, keyword glossary, or extended dialogue.
+
+**Formatting**: Use clean Markdown — headings, bullet lists, and bold emphasis are encouraged. Code blocks are only for actual code; never use them for annotations or regular sentences. Keep the answer concise.`
 }
 
 function buildAssistantDraft(actionId: SelectionActionId): string {
@@ -227,24 +208,27 @@ ${question}`
 const SELECTION_ACTIONS: Record<SelectionActionId, SelectionAction> = {
   lookup: { id: "lookup", label: "查词", buildPrompt: buildLookupPrompt, maxTokens: 1500 },
   pattern: { id: "pattern", label: "句型讲解", buildPrompt: buildPatternPrompt, maxTokens: 2500 },
+  patternMastery: { id: "patternMastery", label: "句型掌握", buildPrompt: buildPatternMasteryPrompt, maxTokens: 2000 },
   explainReply: { id: "explainReply", label: "解释", buildDraft: () => buildAssistantDraft("explainReply"), maxTokens: 2000 },
   translateReply: { id: "translateReply", label: "翻译", buildDraft: () => buildAssistantDraft("translateReply"), maxTokens: 2000 },
   quoteReply: { id: "quoteReply", label: "引用", buildDraft: () => "" },
   readAloud: { id: "readAloud", label: "朗读" },
 }
 
-const PRIMARY_TWEET_SELECTION_ACTIONS: Record<SelectionMode, SelectionActionId[]> = {
-  wordOrPhrase: ["lookup", "pattern", "quoteReply", "readAloud"],
-  sentenceOrPassage: ["lookup", "pattern", "quoteReply", "readAloud"],
+const PRIMARY_SELECTION_ACTIONS: SelectionActionId[] = ["lookup", "patternMastery", "explainReply", "translateReply", "quoteReply", "readAloud"]
+
+type SelectionPromptWindowActionId = Extract<SelectionActionId, "lookup" | "patternMastery">
+
+function formatSelectionPromptWindowDisplay(actionId: SelectionPromptWindowActionId, text: string): string {
+  const labels: Record<SelectionPromptWindowActionId, string> = {
+    lookup: "查词",
+    patternMastery: "句型掌握",
+  }
+  return `${labels[actionId]}：「${text}」`
 }
 
-const PRIMARY_ASSISTANT_SELECTION_ACTIONS: SelectionActionId[] = ["lookup", "explainReply", "translateReply", "quoteReply", "readAloud"]
-
-function getPrimaryActions(menu: SelectionMenuState): SelectionAction[] {
-  const ids = menu.source === "assistantReply"
-    ? PRIMARY_ASSISTANT_SELECTION_ACTIONS
-    : PRIMARY_TWEET_SELECTION_ACTIONS[menu.mode]
-  return ids.map((id) => SELECTION_ACTIONS[id])
+function getPrimaryActions(_menu: SelectionMenuState): SelectionAction[] {
+  return PRIMARY_SELECTION_ACTIONS.map((id) => SELECTION_ACTIONS[id])
 }
 
 // ─── 页面组件 ──────────────────────────────────────────────────────────────────
@@ -353,6 +337,7 @@ export default function HomePage() {
     initialY: number
     maxTokens?: number
   } | null>(null)
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -1096,6 +1081,7 @@ export default function HomePage() {
       isChatLoading ||
       commentAnalysisPrefetching ||
       speechStatus === "recording" ||
+      speechStatus === "preparing" ||
       speechStatus === "processing"
     )
       return
@@ -1181,14 +1167,14 @@ export default function HomePage() {
   }
 
   const handleVoiceToggle = async () => {
-    if (speechStatus === "recording") { whisperSpeechService.stopListening(); setSpeechStatus("idle"); return }
-    setSpeechError(null); setSpeechStatus("recording")
+    if (speechStatus === "recording") { whisperSpeechService.stopListening(); return }
+    setSpeechError(null)
     try { await whisperSpeechService.startListening() }
-    catch { setSpeechStatus("idle"); setSpeechError("无法启动录音") }
+    catch { setSpeechError("无法启动录音") }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
       if (
         inputText.trim() &&
@@ -1221,6 +1207,11 @@ export default function HomePage() {
     return sendMessage(prompt, { tweetOverride: tweet, includeQuotedSelection: false, displayContent, alwaysClear, maxTokens })
   }, [effectiveChatOpen, isMobile, sendMessage])
 
+  const handleSynonymClick = useCallback((word: string) => {
+    if (!selectedTweet) return
+    void openChatForSelection(buildLookupPrompt(word, selectedTweet.text), selectedTweet, `查词：「${word}」`, false, 1500)
+  }, [selectedTweet, openChatForSelection])
+
   const focusChatInput = useCallback(() => {
     if (isMobile) setSheetState("half")
     else if (!effectiveChatOpen) setIsChatOpen(true)
@@ -1251,10 +1242,10 @@ export default function HomePage() {
     }
 
     if (selection.source === "assistantReply") {
-      if (actionId === "lookup" || actionId === "pattern") {
-        const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text)
+      if (actionId === "lookup" || actionId === "patternMastery") {
+        const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text, tweet.text)
         if (!prompt) return
-        const displayContent = actionId === "lookup" ? `查词：「${text}」` : `句型讲解：「${text}」`
+        const displayContent = formatSelectionPromptWindowDisplay(actionId, text)
         setSelectionMenuPhase("windowChoice")
         setPendingWindowChoice({ prompt, displayContent, tweet, alwaysClear: false, maxTokens: SELECTION_ACTIONS[actionId].maxTokens })
         return
@@ -1297,16 +1288,25 @@ export default function HomePage() {
       return
     }
 
-    if (actionId === "lookup" || actionId === "pattern") {
-      const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text)
+    if (actionId === "lookup" || actionId === "patternMastery") {
+      const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text, tweet.text)
       if (!prompt) return
-      const displayContent = actionId === "lookup" ? `查词：「${text}」` : `句型讲解：「${text}」`
+      const displayContent = formatSelectionPromptWindowDisplay(actionId, text)
+      setSelectionMenuPhase("windowChoice")
+      setPendingWindowChoice({ prompt, displayContent, tweet, alwaysClear: true, maxTokens: SELECTION_ACTIONS[actionId].maxTokens })
+      return
+    }
+    if (actionId === "explainReply" || actionId === "translateReply") {
+      const prompt = actionId === "explainReply"
+        ? `请详细解释这段内容的含义，包括语气、背景和关键表达：\n\n「${text}」`
+        : `请将以下内容翻译成自然流畅的中文，并解释关键表达：\n\n「${text}」`
+      const displayContent = actionId === "explainReply" ? `解释：「${text}」` : `翻译：「${text}」`
       setSelectionMenuPhase("windowChoice")
       setPendingWindowChoice({ prompt, displayContent, tweet, alwaysClear: true, maxTokens: SELECTION_ACTIONS[actionId].maxTokens })
       return
     }
     await openChatForSelection(
-      SELECTION_ACTIONS[actionId].buildPrompt?.(text) ?? text,
+      SELECTION_ACTIONS[actionId].buildPrompt?.(text, tweet.text) ?? text,
       tweet, undefined, true, SELECTION_ACTIONS[actionId].maxTokens,
     )
   }, [closeSelectionMenu, effectiveChatOpen, focusChatInput, isMobile, messages.length, openChatForSelection, sendMessage, setSelectionMenuPhase, setPendingWindowChoice])
@@ -1506,7 +1506,7 @@ export default function HomePage() {
                 )}
               </div>
               <div ref={feedScrollRef} className="flex-1 overflow-y-auto overscroll-none hide-vertical-scrollbar min-h-0">
-                <div className="max-w-2xl mx-auto" style={{ paddingBottom: isMobile ? "env(safe-area-inset-bottom, 16px)" : undefined }}>
+                <div className="max-w-3xl mx-auto" style={{ paddingBottom: isMobile ? "env(safe-area-inset-bottom, 16px)" : undefined }}>
                   {(isSearchMode ? searchError : error) && (
                     <div className="mx-4 mt-4 p-3 bg-red-50/90 border border-red-200 rounded-lg text-sm text-red-700 flex justify-between items-center">
                       <span>{isSearchMode ? searchError : error}</span>
@@ -1558,6 +1558,7 @@ export default function HomePage() {
                           })
                         }}
                         isMobile={isMobile}
+                        onImageClick={setPreviewImageUrl}
                       />
                     ))}
                   </div>
@@ -1607,6 +1608,7 @@ export default function HomePage() {
               }}
               isMobile={isMobile}
               style={{ paddingBottom: isMobile ? "env(safe-area-inset-bottom, 16px)" : undefined }}
+              onImageClick={setPreviewImageUrl}
             />
           ) : null}
         </div>
@@ -1628,35 +1630,37 @@ export default function HomePage() {
 
           {/* ── 桌面端：AI 面板 ── */}
           {!isMobile && (
-            <AiPanel
-              variant="desktop"
-              selectedTweet={selectedTweet}
-              messages={messages}
-              inputText={inputText}
-              quotedSelection={quotedSelection}
-              isChatLoading={isChatLoading}
-              speechStatus={speechStatus}
-              speechError={speechError}
-              onClose={() => setIsChatOpen(false)}
-              onSendPreset={(text) => sendMessage(text, { includeQuotedSelection: false })}
-              onCommentAnalysis={() => void handleCommentAnalysis()}
-              commentsLoading={commentsLoading}
-              commentAnalysisPrefetching={commentAnalysisPrefetching}
-              onInputChange={(value) => setInputText(value)}
-              onAssistantTextSelect={handleAssistantTextSelect}
-              onClearQuotedSelection={() => setQuotedSelection(null)}
-              onSubmit={handleSubmit}
-              onKeyDown={handleKeyDown}
-              onVoiceToggle={handleVoiceToggle}
-              onDismissSpeechError={() => setSpeechError(null)}
-              messagesEndRef={messagesEndRef}
-              textareaRef={textareaRef}
-              formatTweetText={smartCase}
-              width={mounted ? chatWidth : DEFAULT_CHAT_WIDTH}
-              minWidth={mounted ? MIN_CHAT_WIDTH : DEFAULT_CHAT_WIDTH}
-              isOpen={effectiveChatOpen}
-              noTransition={noTransition}
-            />
+            <SynonymClickContext.Provider value={handleSynonymClick}>
+              <AiPanel
+                variant="desktop"
+                selectedTweet={selectedTweet}
+                messages={messages}
+                inputText={inputText}
+                quotedSelection={quotedSelection}
+                isChatLoading={isChatLoading}
+                speechStatus={speechStatus}
+                speechError={speechError}
+                onClose={() => setIsChatOpen(false)}
+                onSendPreset={(text) => sendMessage(text, { includeQuotedSelection: false })}
+                onCommentAnalysis={() => void handleCommentAnalysis()}
+                commentsLoading={commentsLoading}
+                commentAnalysisPrefetching={commentAnalysisPrefetching}
+                onInputChange={(value) => setInputText(value)}
+                onAssistantTextSelect={handleAssistantTextSelect}
+                onClearQuotedSelection={() => setQuotedSelection(null)}
+                onSubmit={handleSubmit}
+                onKeyDown={handleKeyDown}
+                onVoiceToggle={handleVoiceToggle}
+                onDismissSpeechError={() => setSpeechError(null)}
+                messagesEndRef={messagesEndRef}
+                textareaRef={textareaRef}
+                formatTweetText={smartCase}
+                width={mounted ? chatWidth : DEFAULT_CHAT_WIDTH}
+                minWidth={mounted ? MIN_CHAT_WIDTH : DEFAULT_CHAT_WIDTH}
+                isOpen={effectiveChatOpen}
+                noTransition={noTransition}
+              />
+            </SynonymClickContext.Provider>
           )}
 
           {/* ── 桌面端：悬浮打开按钮 ── */}
@@ -1674,38 +1678,40 @@ export default function HomePage() {
 
           {/* ── 手机端：底部抽屉 ── */}
           {isMobile && (
-            <AiPanel
-              variant="mobile"
-              selectedTweet={selectedTweet}
-              messages={messages}
-              inputText={inputText}
-              quotedSelection={quotedSelection}
-              isChatLoading={isChatLoading}
-              speechStatus={speechStatus}
-              speechError={speechError}
-              onClose={() => setSheetState(sheetState === "full" ? "half" : "hidden")}
-              onExpand={() => setSheetState("full")}
-              onSendPreset={(text) => sendMessage(text, { includeQuotedSelection: false })}
-              onCommentAnalysis={() => void handleCommentAnalysis()}
-              commentsLoading={commentsLoading}
-              commentAnalysisPrefetching={commentAnalysisPrefetching}
-              onInputChange={(value) => setInputText(value)}
-              onAssistantTextSelect={handleAssistantTextSelect}
-              onClearQuotedSelection={() => setQuotedSelection(null)}
-              onSubmit={handleSubmit}
-              onKeyDown={handleKeyDown}
-              onVoiceToggle={handleVoiceToggle}
-              onDismissSpeechError={() => setSpeechError(null)}
-              messagesEndRef={messagesEndRef}
-              textareaRef={textareaRef}
-              formatTweetText={smartCase}
-              sheetHeight={sheetHeight}
-              isDragging={isDragging}
-              sheetState={sheetState}
-              onHandleTouchStart={handleSheetDragStart}
-              onHandleTouchMove={handleSheetDragMove}
-              onHandleTouchEnd={handleSheetDragEnd}
-            />
+            <SynonymClickContext.Provider value={handleSynonymClick}>
+              <AiPanel
+                variant="mobile"
+                selectedTweet={selectedTweet}
+                messages={messages}
+                inputText={inputText}
+                quotedSelection={quotedSelection}
+                isChatLoading={isChatLoading}
+                speechStatus={speechStatus}
+                speechError={speechError}
+                onClose={() => setSheetState(sheetState === "full" ? "half" : "hidden")}
+                onExpand={() => setSheetState("full")}
+                onSendPreset={(text) => sendMessage(text, { includeQuotedSelection: false })}
+                onCommentAnalysis={() => void handleCommentAnalysis()}
+                commentsLoading={commentsLoading}
+                commentAnalysisPrefetching={commentAnalysisPrefetching}
+                onInputChange={(value) => setInputText(value)}
+                onAssistantTextSelect={handleAssistantTextSelect}
+                onClearQuotedSelection={() => setQuotedSelection(null)}
+                onSubmit={handleSubmit}
+                onKeyDown={handleKeyDown}
+                onVoiceToggle={handleVoiceToggle}
+                onDismissSpeechError={() => setSpeechError(null)}
+                messagesEndRef={messagesEndRef}
+                textareaRef={textareaRef}
+                formatTweetText={smartCase}
+                sheetHeight={sheetHeight}
+                isDragging={isDragging}
+                sheetState={sheetState}
+                onHandleTouchStart={handleSheetDragStart}
+                onHandleTouchMove={handleSheetDragMove}
+                onHandleTouchEnd={handleSheetDragEnd}
+              />
+            </SynonymClickContext.Provider>
           )}
         </div>
 
@@ -1793,6 +1799,11 @@ export default function HomePage() {
         />
       )}
 
+      {/* ── 图片预览弹窗 ── */}
+      {previewImageUrl && (
+        <ImagePreviewModal url={previewImageUrl} onClose={() => setPreviewImageUrl(null)} />
+      )}
+
     </div>
   )
 }
@@ -1809,6 +1820,7 @@ type DetailViewProps = {
   onTextSelect?: (text: string, anchorX: number, anchorY: number) => void
   isMobile: boolean
   style?: React.CSSProperties
+  onImageClick?: (url: string) => void
 }
 
 function DetailView({
@@ -1822,6 +1834,7 @@ function DetailView({
   onTextSelect,
   isMobile,
   style,
+  onImageClick,
 }: DetailViewProps) {
   const readSelection = () => {
     if (!onTextSelect) return
@@ -1839,7 +1852,7 @@ function DetailView({
   return (
     <>
       <div className="flex-1 overflow-y-auto overscroll-none hide-vertical-scrollbar min-h-0">
-        <div className="max-w-2xl mx-auto px-4" style={style}>
+        <div className="max-w-3xl mx-auto px-4" style={style}>
           {/* 原推文 */}
           <div className="py-4 border-b border-gray-100">
             <div className="flex gap-3">
@@ -1884,10 +1897,16 @@ function DetailView({
                 )}
                 {rootTweet.media.length > 0 && rootTweet.media[0].type === "photo" && rootTweet.media[0].url && (
                   <div className="mt-2 rounded-xl overflow-hidden border border-gray-200/80">
-                    <img src={rootTweet.media[0].url} alt="media" className="w-full max-h-48 object-cover" loading="lazy" />
+                    <img
+                      src={rootTweet.media[0].url}
+                      alt="media"
+                      className="w-full max-h-48 object-cover cursor-pointer"
+                      loading="lazy"
+                      onClick={() => onImageClick?.(rootTweet.media[0].url!)}
+                    />
                   </div>
                 )}
-                <div className="mt-2.5 flex items-center gap-4 text-sm md:text-xs text-gray-400">
+                <div className="mt-2.5 flex items-center gap-4 text-sm text-gray-400">
                   <span className="flex items-center gap-1"><Heart className="h-3.5 w-3.5" />{formatCount(rootTweet.likeCount)}</span>
                   <span className="flex items-center gap-1"><MessageCircle className="h-3.5 w-3.5" />{formatCount(rootTweet.replyCount)}</span>
                   {rootTweet.viewCount > 0 && (
@@ -1900,7 +1919,7 @@ function DetailView({
                     title="推文分析"
                   >
                     <Sparkles className="h-3.5 w-3.5" />
-                    <span className="text-sm md:text-xs font-medium">推文分析</span>
+                    <span className="text-sm font-medium">推文分析</span>
                   </button>
                 </div>
               </div>
@@ -2010,13 +2029,14 @@ function DetailView({
 
 // ─── TweetCard 组件 ────────────────────────────────────────────────────────────
 function TweetCard({
-  tweet, index, isSelected, onTextSelect, onAiClick, onOpenComments, isMobile,
+  tweet, index, isSelected, onTextSelect, onAiClick, onOpenComments, isMobile, onImageClick,
 }: {
   tweet: Tweet; index: number; isSelected: boolean
   onTextSelect?: (text: string, anchorX: number, anchorY: number) => void
   onAiClick: () => void
   onOpenComments: (tweet: Tweet) => void
   isMobile: boolean
+  onImageClick?: (url: string) => void
 }) {
   const [isExpanded, setIsExpanded] = useState(false)
 
@@ -2068,13 +2088,13 @@ function TweetCard({
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-1.5 flex-wrap">
-            <span className="font-semibold text-sm text-gray-900 truncate">{tweet.author.name}</span>
-            <span className="text-sm md:text-xs text-gray-400 shrink-0">@{tweet.author.userName}</span>
-            <span className="text-sm md:text-xs text-gray-300 shrink-0">·</span>
-            <span className="text-sm md:text-xs text-gray-400 shrink-0">{formatRelativeTime(tweet.createdAt)}</span>
+            <span className="font-semibold text-base text-gray-900 truncate">{tweet.author.name}</span>
+            <span className="text-sm text-gray-400 shrink-0">@{tweet.author.userName}</span>
+            <span className="text-sm text-gray-300 shrink-0">·</span>
+            <span className="text-sm text-gray-400 shrink-0">{formatRelativeTime(tweet.createdAt)}</span>
           </div>
           <p
-            className={`mt-1.5 text-base md:text-sm text-gray-800 leading-relaxed whitespace-pre-wrap break-words select-text ${
+            className={`mt-1.5 text-base text-gray-800 leading-relaxed whitespace-pre-wrap break-words select-text ${
               isExpanded ? "" : "line-clamp-6"
             }`}
             onMouseUp={handleMouseUp}
@@ -2084,7 +2104,7 @@ function TweetCard({
           </p>
           {tweet.textZh && (
             <p
-              className={`mt-1 text-base md:text-sm text-gray-500 leading-relaxed whitespace-pre-wrap break-words select-text ${
+              className={`mt-1 text-base text-gray-500 leading-relaxed whitespace-pre-wrap break-words select-text ${
                 isExpanded ? "" : "line-clamp-4"
               }`}
               onMouseUp={handleMouseUp}
@@ -2104,10 +2124,16 @@ function TweetCard({
           )}
           {tweet.media.length > 0 && tweet.media[0].type === "photo" && tweet.media[0].url && (
             <div className="mt-2 rounded-xl overflow-hidden border border-gray-200/80">
-              <img src={tweet.media[0].url} alt="media" className="w-full max-h-48 object-cover" loading="lazy" />
+              <img
+                src={tweet.media[0].url}
+                alt="media"
+                className="w-full max-h-48 object-cover cursor-pointer"
+                loading="lazy"
+                onClick={(e) => { e.stopPropagation(); onImageClick?.(tweet.media[0].url!) }}
+              />
             </div>
           )}
-          <div className="mt-2.5 flex items-center gap-4 text-sm md:text-xs text-gray-400">
+          <div className="mt-2.5 flex items-center gap-4 text-sm text-gray-400">
             <span className="flex items-center gap-1"><Heart className="h-3.5 w-3.5" />{formatCount(tweet.likeCount)}</span>
             <button
               type="button"
@@ -2127,7 +2153,7 @@ function TweetCard({
               title="推文分析"
             >
               <Sparkles className="h-3.5 w-3.5" />
-              <span className="text-sm md:text-xs font-medium">推文分析</span>
+              <span className="text-sm font-medium">推文分析</span>
             </button>
           </div>
         </div>
@@ -2296,3 +2322,32 @@ function CommentsOverlay({
   )
 }
 
+// ─── ImagePreviewModal 组件 ────────────────────────────────────────────────────
+function ImagePreviewModal({ url, onClose }: { url: string; onClose: () => void }) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose() }
+    window.addEventListener("keydown", handler)
+    return () => window.removeEventListener("keydown", handler)
+  }, [onClose])
+
+  return (
+    <div
+      className="fixed inset-0 z-[150] flex items-center justify-center bg-black/80"
+      onClick={onClose}
+    >
+      <div className="relative" onClick={(e) => e.stopPropagation()}>
+        <img
+          src={url}
+          alt="preview"
+          className="max-w-[90vw] max-h-[90vh] object-contain rounded-xl shadow-2xl"
+        />
+        <button
+          onClick={onClose}
+          className="absolute top-2 right-2 w-8 h-8 flex items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80 text-lg leading-none"
+        >
+          ×
+        </button>
+      </div>
+    </div>
+  )
+}

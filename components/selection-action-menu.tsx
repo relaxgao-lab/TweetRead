@@ -28,18 +28,18 @@ export function SelectionActionMenu({
   useEffect(() => setMounted(true), [])
 
   const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 375
-  const estimatedWidth = Math.max(220, primaryActions.length * 88)
-  const left = Math.max(8, Math.min(anchorX - estimatedWidth / 2, viewportWidth - estimatedWidth - 8))
+  const maxMenuWidth = Math.min(viewportWidth - 16, 480)
+  const left = Math.max(8, Math.min(anchorX - maxMenuWidth / 2, viewportWidth - maxMenuWidth - 8))
   const top = anchorY + 10
 
   const menu: ReactNode = (
     <div
       data-selection-action-menu
       className="fixed z-[200] pointer-events-auto"
-      style={{ left, top }}
+      style={{ left, top, width: maxMenuWidth }}
     >
       <div className="relative">
-        <div className="flex items-center gap-1 rounded-full border border-gray-200/90 bg-white/95 p-1 shadow-xl backdrop-blur-sm">
+        <div className="flex flex-wrap items-center gap-1 rounded-2xl border border-gray-200/90 bg-white/95 p-1 shadow-xl backdrop-blur-sm">
           {primaryActions.map((action) => {
             const isLoading = action.id === loadingActionId
             return (
