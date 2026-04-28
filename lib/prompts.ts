@@ -7,13 +7,9 @@ export function isWordOrPhraseLookup(text: string): boolean {
   return wordCount <= 4 && !hasStrongSentencePunctuation && !hasClauseSignal
 }
 
-export function buildLookupPrompt(text: string, tweetContext?: string): string {
-  const ctxBlock = tweetContext
-    ? `\nSource tweet (use as context to accurately understand the selected text):\n「${tweetContext}」\n`
-    : ""
-
+export function buildLookupPrompt(text: string): string {
   if (isWordOrPhraseLookup(text)) {
-    return `${ctxBlock}请解释我在【这段文字】里选中的这个英文单词或短语：「${text}」
+    return `请解释我在【这段文字】里选中的这个英文单词或短语：「${text}」
 
 这次请使用"英语词典讲解"风格，目标是帮助中文用户真正学会它，而不是只看中文翻译。
 
@@ -35,7 +31,7 @@ export function buildLookupPrompt(text: string, tweetContext?: string): string {
 - 不要脱离当前文字语境，不要只给词典式死定义`
   }
 
-  return `${ctxBlock}请解释我在这条推文里选中的这句或这段英文：「${text}」。
+  return `请解释我在这条推文里选中的这句或这段英文：「${text}」。
 
 这次请使用"英语精读拆解"风格，目标是帮助中文用户真正读懂句子结构、语气和表达方式，而不是只给整句翻译。
 

@@ -1,6 +1,6 @@
 "use client"
 
-import React, { Fragment, createContext, memo, useCallback, useContext, useMemo, useRef } from "react"
+import React, { Fragment, createContext, memo, useCallback, useContext, useEffect, useMemo, useRef } from "react"
 import ReactMarkdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkBreaks from "remark-breaks"
@@ -768,6 +768,18 @@ function ChatInput({
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
 }) {
   const inputBusy = isChatLoading || Boolean(commentAnalysisPrefetching)
+  const isComposingRef = useRef(false)
+
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = "auto"
+    el.style.height = `${el.scrollHeight}px`
+  }, [inputText, textareaRef])
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (isComposingRef.current) { e.preventDefault(); return }
+    onKeyDown(e)
+  }
   return (
     <div className={`shrink-0 border-t border-gray-200 ${variant === "desktop" ? "p-4" : "p-3"} bg-gray-50/80`}>
       {speechError && (
@@ -806,12 +818,15 @@ function ChatInput({
             ref={textareaRef}
             value={inputText}
             onChange={(e) => onInputChange(e.target.value)}
-            onKeyDown={onKeyDown}
+            onCompositionStart={() => { isComposingRef.current = true }}
+            onCompositionEnd={() => { isComposingRef.current = false }}
+            onKeyDown={handleKeyDown}
             placeholder={selectedTweet
               ? (variant === "desktop" ? "输入或语音...（Shift+Enter 换行）" : "输入或语音...")
               : (variant === "desktop" ? "请先点击左侧推文..." : "请先点击推文...")}
             disabled={inputBusy || !selectedTweet || speechStatus === "processing" || speechStatus === "preparing"}
-            className="block w-full min-h-[44px] max-h-[120px] text-base resize-none pt-2.5 px-3 border-0 focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent placeholder:text-gray-400"
+            className="block w-full min-h-[44px] text-base resize-none pt-2.5 px-3 border-0 focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent placeholder:text-gray-400 overflow-y-auto"
+            style={{ maxHeight: "200px" }}
             rows={1}
           />
           <div className="flex items-center justify-end gap-1.5 p-1.5 shrink-0">

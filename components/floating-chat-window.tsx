@@ -89,6 +89,7 @@ export function FloatingChatWindow({
   const userMessageRefs = useRef<Record<number, HTMLDivElement | null>>({})
   const initializedRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const isComposingRef = useRef(false)
 
   useEffect(() => setMounted(true), [])
 
@@ -180,7 +181,7 @@ export function FloatingChatWindow({
   }, [inputText, isLoading, quotedSelection, sendMessage])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); handleSend() }
+    if (e.key === "Enter" && !e.shiftKey && !isComposingRef.current) { e.preventDefault(); handleSend() }
   }, [handleSend])
 
   // ── Drag ──────────────────────────────────────────────────────────────────
@@ -404,6 +405,8 @@ export function FloatingChatWindow({
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
+            onCompositionStart={() => { isComposingRef.current = true }}
+            onCompositionEnd={() => { isComposingRef.current = false }}
             placeholder="继续追问…"
             disabled={isLoading || speechStatus === "processing" || speechStatus === "preparing"}
             rows={1}

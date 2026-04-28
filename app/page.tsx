@@ -41,7 +41,7 @@ type SelectionActionId = "lookup" | "pattern" | "patternMastery" | "readAloud" |
 type SelectionAction = {
   id: SelectionActionId
   label: string
-  buildPrompt?: (text: string, tweetContext?: string) => string
+  buildPrompt?: (text: string) => string
   buildDraft?: () => string
   /** 该动作触发的 AI 回答所需的 max_tokens 上限（未配置则走服务端默认） */
   maxTokens?: number
@@ -135,11 +135,8 @@ Both examples must change the subject AND the action/domain — do NOT just swap
 #### 你来试试 Your Turn
 [In Chinese: Give the user one specific fill-in challenge — name a real-world scenario they could describe with this pattern, and invite them to write their own sentence. Example style: "现在轮到你了：用这个句型描述一件最近发生的事，写一句话试试？"]`
 
-function buildPatternPrompt(text: string, tweetContext?: string): string {
-  const ctxBlock = tweetContext
-    ? `\nSource tweet (use as context to interpret the selected text accurately):\n「${tweetContext}」\n`
-    : ""
-  return `${ctxBlock}Please analyze the selected sentence comprehensively based on the context: 「${text}」
+function buildPatternPrompt(text: string): string {
+  return `Please analyze the selected sentence comprehensively based on the context: 「${text}」
 
 1. **Sentence Meaning / 句子含义**: Explain the literal meaning of the entire sentence in both English and Chinese.
 2. **Sentence Pattern Mastery / 句型掌握**: ${PATTERN_MASTERY_OUTPUT_SPEC}
@@ -149,13 +146,10 @@ function buildPatternPrompt(text: string, tweetContext?: string): string {
 **Formatting**: Use clean Markdown — headings, bullet lists, and bold emphasis are encouraged. Code blocks are only for actual code; never use them for annotations or regular sentences. Keep explanations concise.`
 }
 
-function buildPatternMasteryPrompt(text: string, tweetContext?: string): string {
-  const ctxBlock = tweetContext
-    ? `\nSource tweet (use as context to interpret meaning — do not expand the pattern beyond the selected text):\n「${tweetContext}」\n`
-    : ""
-  return `${ctxBlock}Please analyze ONLY this selected excerpt for sentence pattern mastery: 「${text}」
+function buildPatternMasteryPrompt(text: string): string {
+  return `Please analyze ONLY this selected excerpt for sentence pattern mastery: 「${text}」
 
-IMPORTANT: Derive the pattern template directly from the selected text above. Use the provided tweet context only to understand the meaning accurately — the pattern should still be grounded in 「${text}」 itself.
+IMPORTANT: Derive the pattern template directly from the selected text above. The pattern should be grounded in 「${text}」 itself.
 
 ${PATTERN_MASTERY_OUTPUT_SPEC}
 
@@ -1174,7 +1168,7 @@ export default function HomePage() {
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
       if (
         inputText.trim() &&
@@ -1209,7 +1203,7 @@ export default function HomePage() {
 
   const handleSynonymClick = useCallback((word: string) => {
     if (!selectedTweet) return
-    void openChatForSelection(buildLookupPrompt(word, selectedTweet.text), selectedTweet, `查词：「${word}」`, false, 1500)
+    void openChatForSelection(buildLookupPrompt(word), selectedTweet, `查词：「${word}」`, false, 1500)
   }, [selectedTweet, openChatForSelection])
 
   const focusChatInput = useCallback(() => {
@@ -1243,7 +1237,7 @@ export default function HomePage() {
 
     if (selection.source === "assistantReply") {
       if (actionId === "lookup" || actionId === "patternMastery") {
-        const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text, tweet.text)
+        const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text)
         if (!prompt) return
         const displayContent = formatSelectionPromptWindowDisplay(actionId, text)
         setSelectionMenuPhase("windowChoice")
@@ -1289,7 +1283,7 @@ export default function HomePage() {
     }
 
     if (actionId === "lookup" || actionId === "patternMastery") {
-      const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text, tweet.text)
+      const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text)
       if (!prompt) return
       const displayContent = formatSelectionPromptWindowDisplay(actionId, text)
       setSelectionMenuPhase("windowChoice")
@@ -1306,7 +1300,7 @@ export default function HomePage() {
       return
     }
     await openChatForSelection(
-      SELECTION_ACTIONS[actionId].buildPrompt?.(text, tweet.text) ?? text,
+      SELECTION_ACTIONS[actionId].buildPrompt?.(text) ?? text,
       tweet, undefined, true, SELECTION_ACTIONS[actionId].maxTokens,
     )
   }, [closeSelectionMenu, effectiveChatOpen, focusChatInput, isMobile, messages.length, openChatForSelection, sendMessage, setSelectionMenuPhase, setPendingWindowChoice])
