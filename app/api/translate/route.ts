@@ -23,7 +23,7 @@ export async function POST(request: Request) {
               },
             ],
             temperature: 0.3,
-            max_tokens: 300,
+            max_completion_tokens: 300,
             stream: false,
           })
           const textZh = completion.choices[0].message.content?.trim() ?? ""

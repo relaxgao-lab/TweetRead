@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState, useCallback } from "react"
 import { createPortal } from "react-dom"
-import { ChevronDown, Loader2, Mic, Send, StopCircle, X } from "lucide-react"
+import { ChevronDown, Keyboard, Loader2, Mic, Send, StopCircle, X } from "lucide-react"
 import { AssistantMarkdown, SynonymClickContext } from "@/components/ai-panel"
 import { buildLookupPrompt } from "@/lib/prompts"
 import { Button } from "@/components/ui/button"
@@ -13,7 +13,7 @@ import { readSelectionAnchor } from "@/lib/selection"
 import { WhisperSpeechService } from "@/app/conversation/whisper-speech-service"
 import type { SpeechStatus } from "@/app/conversation/whisper-speech-service"
 
-const INITIAL_WIDTH = 380
+const INITIAL_WIDTH = 760
 const INITIAL_HEIGHT = 480
 const MIN_WIDTH = 260
 const MIN_HEIGHT = 240
@@ -64,6 +64,7 @@ export function FloatingChatWindow({
   const [size, setSize] = useState({ width: INITIAL_WIDTH, height: INITIAL_HEIGHT })
   const [isDragging, setIsDragging] = useState(false)
   const [resizeDir, setResizeDir] = useState<ResizeDir | null>(null)
+  const [showShortcuts, setShowShortcuts] = useState(false)
 
   // Quote state
   const [quotedSelection, setQuotedSelection] = useState<{ text: string } | null>(null)
@@ -164,6 +165,17 @@ export function FloatingChatWindow({
     document.addEventListener("mousedown", dismiss)
     return () => document.removeEventListener("mousedown", dismiss)
   }, [pendingQuote])
+
+  // Dismiss shortcuts panel on outside click
+  useEffect(() => {
+    if (!showShortcuts) return
+    const dismiss = (e: MouseEvent) => {
+      const target = e.target as HTMLElement
+      if (!target.closest("[data-shortcuts]")) setShowShortcuts(false)
+    }
+    document.addEventListener("mousedown", dismiss)
+    return () => document.removeEventListener("mousedown", dismiss)
+  }, [showShortcuts])
 
   // ── Synonym chip click ────────────────────────────────────────────────────
   const handleSynonymClick = useCallback((word: string) => {
@@ -292,14 +304,35 @@ export function FloatingChatWindow({
         onTouchStart={(e) => { if (e.touches[0]) handleDragStart(e.touches[0].clientX, e.touches[0].clientY) }}
       >
         <h3 className="text-sm font-semibold text-gray-800 truncate">{displayContent}</h3>
-        <button
-          type="button"
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={onClose}
-          className="shrink-0 p-1 rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          <div className="relative" data-shortcuts>
+            <button
+              type="button"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => setShowShortcuts((v) => !v)}
+              className="p-1 rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
+              title="快捷键"
+            >
+              <Keyboard className="h-4 w-4" />
+            </button>
+            {showShortcuts && (
+              <div className="absolute right-0 top-7 z-20 w-52 rounded-lg border border-gray-200 bg-white shadow-lg p-3 text-xs text-gray-600 space-y-1.5">
+                <div className="flex justify-between"><span>发送消息</span><kbd className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">Enter</kbd></div>
+                <div className="flex justify-between"><span>换行</span><kbd className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">Shift + Enter</kbd></div>
+                <div className="flex justify-between"><span>语音输入</span><kbd className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">拖拽标题栏</kbd></div>
+                <div className="flex justify-between"><span>关闭窗口</span><kbd className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">× 按钮</kbd></div>
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={onClose}
+            className="p-1 rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       {/* Messages */}

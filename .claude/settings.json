@@ -9,7 +9,9 @@
       "Bash(echo \"started pid $!\")",
       "Read(//private/tmp/**)",
       "Bash(xxd)",
-      "Bash(xargs cat *)"
+      "Bash(xargs cat *)",
+      "Bash(git -C /Users/gaojiangfeng/Desktop/project/node_learning/node_learning/TweetRead log --oneline -10 -- app/api/translate/route.ts)",
+      "Bash(git -C /Users/gaojiangfeng/Desktop/project/node_learning/node_learning/TweetRead log --oneline -10)"
     ]
   }
 }

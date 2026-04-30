@@ -49,6 +49,18 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? value as Record<string, unknown> : {}
 }
 
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+}
+
 function parseMedia(rawMedia: unknown): TweetMedia[] {
   if (!Array.isArray(rawMedia)) return []
   return rawMedia.map((item) => {
@@ -66,7 +78,7 @@ function parseTweet(raw: unknown): Tweet {
   const author = asRecord(tweet.author)
   return {
     id: (tweet.id as string | undefined) ?? "",
-    text: (tweet.text as string | undefined) ?? "",
+    text: decodeHtmlEntities((tweet.text as string | undefined) ?? ""),
     url: (tweet.url as string | undefined) ?? `https://x.com/i/web/status/${(tweet.id as string | undefined) ?? ""}`,
     createdAt: (tweet.createdAt as string | undefined) ?? "",
     likeCount: (tweet.likeCount as number | undefined) ?? 0,
