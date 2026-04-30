@@ -7,16 +7,18 @@ export function isWordOrPhraseLookup(text: string): boolean {
   return wordCount <= 4 && !hasStrongSentencePunctuation && !hasClauseSignal
 }
 
-export function buildLookupPrompt(text: string): string {
+export function buildLookupPrompt(text: string, tweetText?: string): string {
+  const tweetBlock = tweetText ? `推文原文（上下文参考）：\n「${tweetText}」\n\n` : ""
+
   if (isWordOrPhraseLookup(text)) {
-    return `请解释我在【这段文字】里选中的这个英文单词或短语：「${text}」
+    return `${tweetBlock}请解释我在这条推文里选中的这个英文单词或短语：「${text}」
 
 这次请使用"英语词典讲解"风格，目标是帮助中文用户真正学会它，而不是只看中文翻译。
 
 请严格按以下顺序，尽量简洁：
 
 1. 原词 / 原短语：原样写出，标注音标（IPA，如 /ˈeksəmpəl/），并标注词性（n. / v. / adj. 等）
-2. 语境义：它在这段文字里的自然含义
+2. 语境义：它在这条推文里的自然含义
 3. 用法提示：语气、搭配、感情色彩、隐含意思，或为什么这样用
 4. 常见误区：容易按字面误解，或容易和别的表达混淆时提醒
 5. 英文例句：1个简短自然的例句（15词以内），附中文翻译
@@ -28,10 +30,10 @@ export function buildLookupPrompt(text: string): string {
 - 单词或短语必须标注音标（IPA），方便用户知道如何发音
 - 如果是俚语、缩写、梗、固定搭配或带语气的说法，直接点明
 - 不要展开成长篇文章，像老师讲词汇重点一样简洁
-- 不要脱离当前文字语境，不要只给词典式死定义`
+- 必须结合推文上下文解释语境义，不要只给词典式死定义`
   }
 
-  return `请解释我在这条推文里选中的这句或这段英文：「${text}」。
+  return `${tweetBlock}请解释我在这条推文里选中的这句或这段英文：「${text}」。
 
 这次请使用"英语精读拆解"风格，目标是帮助中文用户真正读懂句子结构、语气和表达方式，而不是只给整句翻译。
 
@@ -48,5 +50,5 @@ export function buildLookupPrompt(text: string): string {
 - 不要逐词硬译，要优先解释真实语境
 - 如果字面义和真实语境义不同，要点明
 - 不要长篇大论，像老师带着学生做一句精读
-- 不要脱离当前推文语境`
+- 必须结合推文上下文解释，不要脱离当前推文语境`
 }

@@ -41,7 +41,7 @@ type SelectionActionId = "lookup" | "pattern" | "patternMastery" | "readAloud" |
 type SelectionAction = {
   id: SelectionActionId
   label: string
-  buildPrompt?: (text: string) => string
+  buildPrompt?: (text: string, tweetText?: string) => string
   buildDraft?: () => string
   /** 该动作触发的 AI 回答所需的 max_tokens 上限（未配置则走服务端默认） */
   maxTokens?: number
@@ -146,10 +146,11 @@ function buildPatternPrompt(text: string): string {
 **Formatting**: Use clean Markdown — headings, bullet lists, and bold emphasis are encouraged. Code blocks are only for actual code; never use them for annotations or regular sentences. Keep explanations concise.`
 }
 
-function buildPatternMasteryPrompt(text: string): string {
-  return `Please analyze ONLY this selected excerpt for sentence pattern mastery: 「${text}」
+function buildPatternMasteryPrompt(text: string, tweetText?: string): string {
+  const tweetBlock = tweetText ? `Source tweet (for context):\n「${tweetText}」\n\n` : ""
+  return `${tweetBlock}Please analyze ONLY this selected excerpt for sentence pattern mastery: 「${text}」
 
-IMPORTANT: Derive the pattern template directly from the selected text above. The pattern should be grounded in 「${text}」 itself.
+IMPORTANT: Derive the pattern template directly from the selected text above. The pattern should be grounded in 「${text}」 itself. Use the source tweet above to inform your interpretation of meaning, register, and context.
 
 ${PATTERN_MASTERY_OUTPUT_SPEC}
 
@@ -1237,7 +1238,7 @@ export default function HomePage() {
 
     if (selection.source === "assistantReply") {
       if (actionId === "lookup" || actionId === "patternMastery") {
-        const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text)
+        const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text, tweet.text)
         if (!prompt) return
         const displayContent = formatSelectionPromptWindowDisplay(actionId, text)
         setSelectionMenuPhase("windowChoice")
@@ -1283,7 +1284,7 @@ export default function HomePage() {
     }
 
     if (actionId === "lookup" || actionId === "patternMastery") {
-      const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text)
+      const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text, tweet.text)
       if (!prompt) return
       const displayContent = formatSelectionPromptWindowDisplay(actionId, text)
       setSelectionMenuPhase("windowChoice")
@@ -1300,7 +1301,7 @@ export default function HomePage() {
       return
     }
     await openChatForSelection(
-      SELECTION_ACTIONS[actionId].buildPrompt?.(text) ?? text,
+      SELECTION_ACTIONS[actionId].buildPrompt?.(text, tweet.text) ?? text,
       tweet, undefined, true, SELECTION_ACTIONS[actionId].maxTokens,
     )
   }, [closeSelectionMenu, effectiveChatOpen, focusChatInput, isMobile, messages.length, openChatForSelection, sendMessage, setSelectionMenuPhase, setPendingWindowChoice])
