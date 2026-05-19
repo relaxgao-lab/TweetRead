@@ -8,8 +8,8 @@ import { FloatingChatWindow } from "@/components/floating-chat-window"
 import { streamChatResponse } from "@/lib/use-chat-stream"
 import { isWordOrPhraseLookup, buildLookupPrompt } from "@/lib/prompts"
 import { ACCOUNTS } from "@/config/accounts"
-import type { Tweet } from "@/lib/twitter"
-import { formatRelativeTime, formatCount } from "@/lib/twitter"
+import type { Tweet, Article, ArticleBlock } from "@/lib/twitter"
+import { formatRelativeTime, formatCount, isArticleTweet } from "@/lib/twitter"
 import { useSelectionScrollLock } from "@/lib/hooks"
 import { readSelectionAnchor } from "@/lib/selection"
 import {
@@ -1596,29 +1596,52 @@ export default function HomePage() {
                   )}
 
                   <div className="divide-y divide-gray-100/80">
-                    {displayTweets.map((tweet, idx) => (
-                      <TweetCard
-                        key={tweet.id}
-                        tweet={tweet}
-                        index={idx}
-                        isSelected={selectedTweet?.id === tweet.id}
-                        onAiClick={() => handleOpenAI(tweet)}
-                        onOpenComments={handleOpenDetail}
-                        onTextSelect={(text, ax, ay) => {
-                          setPendingSelectionActionId(null)
-                          setSelectionMenu({
-                            text,
-                            anchorX: ax,
-                            anchorY: ay,
-                            tweet,
-                            mode: getSelectionMode(text),
-                            source: "tweet",
-                          })
-                        }}
-                        isMobile={isMobile}
-                        onImageClick={setPreviewImageUrl}
-                      />
-                    ))}
+                    {displayTweets.map((tweet, idx) =>
+                      isArticleTweet(tweet) ? (
+                        <ArticleCard
+                          key={tweet.id}
+                          tweet={tweet}
+                          index={idx}
+                          isSelected={selectedTweet?.id === tweet.id}
+                          onAiClick={() => handleOpenAI(tweet)}
+                          isMobile={isMobile}
+                          onImageClick={setPreviewImageUrl}
+                          onTextSelect={(text, ax, ay) => {
+                            setPendingSelectionActionId(null)
+                            setSelectionMenu({
+                              text,
+                              anchorX: ax,
+                              anchorY: ay,
+                              tweet,
+                              mode: getSelectionMode(text),
+                              source: "tweet",
+                            })
+                          }}
+                        />
+                      ) : (
+                        <TweetCard
+                          key={tweet.id}
+                          tweet={tweet}
+                          index={idx}
+                          isSelected={selectedTweet?.id === tweet.id}
+                          onAiClick={() => handleOpenAI(tweet)}
+                          onOpenComments={handleOpenDetail}
+                          onTextSelect={(text, ax, ay) => {
+                            setPendingSelectionActionId(null)
+                            setSelectionMenu({
+                              text,
+                              anchorX: ax,
+                              anchorY: ay,
+                              tweet,
+                              mode: getSelectionMode(text),
+                              source: "tweet",
+                            })
+                          }}
+                          isMobile={isMobile}
+                          onImageClick={setPreviewImageUrl}
+                        />
+                      )
+                    )}
                   </div>
 
                   {displayHasMore && (
@@ -2407,5 +2430,198 @@ function ImagePreviewModal({ url, onClose }: { url: string; onClose: () => void 
         </button>
       </div>
     </div>
+  )
+}
+
+// ─── ArticleCard 组件 ──────────────────────────────────────────────────────────
+function applyInlineStyles(text: string, ranges?: Article["contents"][number]["inlineStyleRanges"]): React.ReactNode {
+  if (!ranges || ranges.length === 0) return text
+  const sorted = [...ranges].sort((a, b) => a.offset - b.offset)
+  const nodes: React.ReactNode[] = []
+  let pos = 0
+  for (const r of sorted) {
+    if (r.offset > pos) nodes.push(text.slice(pos, r.offset))
+    const chunk = text.slice(r.offset, r.offset + r.length)
+    if (r.style === "Bold") nodes.push(<strong key={r.offset}>{chunk}</strong>)
+    else if (r.style === "Italic") nodes.push(<em key={r.offset}>{chunk}</em>)
+    else nodes.push(chunk)
+    pos = r.offset + r.length
+  }
+  if (pos < text.length) nodes.push(text.slice(pos))
+  return <>{nodes}</>
+}
+
+function ArticleBlockRenderer({ block, onImageClick }: { block: ArticleBlock; onImageClick?: (url: string) => void }) {
+  switch (block.type) {
+    case "header-two":
+      return <h2 className="text-lg font-bold text-gray-900 mt-4 mb-1">{applyInlineStyles(block.text ?? "", block.inlineStyleRanges)}</h2>
+    case "header-three":
+      return <h3 className="text-base font-semibold text-gray-900 mt-3 mb-1">{applyInlineStyles(block.text ?? "", block.inlineStyleRanges)}</h3>
+    case "blockquote":
+      return <blockquote className="border-l-4 border-emerald-400 pl-3 my-2 text-gray-600 italic text-sm">{applyInlineStyles(block.text ?? "", block.inlineStyleRanges)}</blockquote>
+    case "ordered-list-item":
+      return <li className="ml-5 list-decimal text-sm text-gray-800 leading-relaxed">{applyInlineStyles(block.text ?? "", block.inlineStyleRanges)}</li>
+    case "unordered-list-item":
+      return <li className="ml-5 list-disc text-sm text-gray-800 leading-relaxed">{applyInlineStyles(block.text ?? "", block.inlineStyleRanges)}</li>
+    case "image":
+      return block.url ? (
+        <div className="my-3 rounded-xl overflow-hidden border border-gray-200/80">
+          <img
+            src={block.url}
+            alt=""
+            className="w-full max-h-80 object-cover cursor-pointer"
+            loading="lazy"
+            onClick={() => onImageClick?.(block.url!)}
+          />
+        </div>
+      ) : null
+    case "divider":
+      return <hr className="my-4 border-gray-200" />
+    default:
+      return block.text ? (
+        <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap break-words select-text">
+          {applyInlineStyles(block.text, block.inlineStyleRanges)}
+        </p>
+      ) : null
+  }
+}
+
+function ArticleCard({
+  tweet, index, isSelected, onAiClick, isMobile, onImageClick, onTextSelect,
+}: {
+  tweet: Tweet; index: number; isSelected: boolean
+  onAiClick: () => void
+  isMobile: boolean
+  onImageClick?: (url: string) => void
+  onTextSelect?: (text: string, anchorX: number, anchorY: number) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [article, setArticle] = useState<Article | null>(null)
+  const [articleLoading, setArticleLoading] = useState(false)
+  const [articleError, setArticleError] = useState<string | null>(null)
+
+  const readSelection = () => {
+    if (!onTextSelect) return
+    const anchor = readSelectionAnchor({ maxLength: 800 })
+    if (!anchor) return
+    onTextSelect(anchor.text, anchor.anchorX, anchor.anchorY)
+  }
+
+  const handleExpand = async () => {
+    if (expanded) { setExpanded(false); return }
+    setExpanded(true)
+    if (article || articleLoading) return
+    setArticleLoading(true)
+    setArticleError(null)
+    try {
+      const res = await fetch(`/api/articles/${tweet.id}`)
+      if (!res.ok) throw new Error("加载失败")
+      const data = await res.json() as { article: Article }
+      setArticle(data.article)
+    } catch (e) {
+      setArticleError(e instanceof Error ? e.message : "加载失败")
+    } finally {
+      setArticleLoading(false)
+    }
+  }
+
+  const displayTitle = article?.title ?? ""
+  const displayPreview = article?.previewText ?? ""
+
+  return (
+    <article
+      className={`px-4 py-4 transition-colors tweet-card ${
+        isSelected
+          ? "bg-blue-50/90 border-l-[3px] border-blue-400"
+          : "bg-white/75 hover:bg-white/90"
+      }`}
+      style={{ animationDelay: `${Math.min(index * 30, 300)}ms` }}
+    >
+      <div className="flex gap-3">
+        <div className="shrink-0">
+          {tweet.author.profilePicture ? (
+            <Image
+              src={tweet.author.profilePicture}
+              alt={tweet.author.name}
+              width={40} height={40}
+              className="w-10 h-10 rounded-full object-cover"
+              unoptimized
+            />
+          ) : (
+            <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 text-sm font-bold">
+              {tweet.author.name?.[0] ?? "?"}
+            </div>
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline gap-1.5 flex-wrap">
+            <span className="font-semibold text-base text-gray-900 truncate">{tweet.author.name}</span>
+            <span className="text-sm text-gray-400 shrink-0">@{tweet.author.userName}</span>
+            <span className="text-sm text-gray-300 shrink-0">·</span>
+            <span className="text-sm text-gray-400 shrink-0">{formatRelativeTime(tweet.createdAt)}</span>
+            <span className="ml-1 inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 border border-emerald-200">文章</span>
+          </div>
+
+          {/* 封面图 + 标题预览卡片 */}
+          <button
+            type="button"
+            className="mt-2 w-full text-left rounded-xl border border-gray-200/80 overflow-hidden bg-gray-50 hover:bg-gray-100/80 transition-colors"
+            onClick={handleExpand}
+          >
+            {tweet.media.length > 0 && tweet.media[0].url ? (
+              <img src={tweet.media[0].url} alt="" className="w-full max-h-40 object-cover" loading="lazy" />
+            ) : null}
+            <div className="px-3 py-2.5">
+              {articleLoading && !displayTitle ? (
+                <div className="h-4 bg-gray-200 rounded animate-pulse w-3/4" />
+              ) : displayTitle ? (
+                <p className="font-semibold text-sm text-gray-900 leading-snug line-clamp-2">{displayTitle}</p>
+              ) : (
+                <p className="text-xs text-gray-400">点击加载文章</p>
+              )}
+              {displayPreview && !expanded && (
+                <p className="mt-1 text-xs text-gray-500 line-clamp-2 leading-relaxed">{displayPreview}</p>
+              )}
+              <p className="mt-1.5 text-xs text-emerald-600 font-medium">{expanded ? "收起" : "阅读全文"}</p>
+            </div>
+          </button>
+
+          {/* 展开的文章正文 */}
+          {expanded && (
+            <div
+              className="mt-3 space-y-2"
+              onMouseUp={isMobile ? undefined : readSelection}
+              onTouchEnd={isMobile ? () => requestAnimationFrame(readSelection) : undefined}
+            >
+              {articleLoading && (
+                <div className="space-y-2">
+                  {[1,2,3].map(i => <div key={i} className="h-3 bg-gray-200 rounded animate-pulse" style={{ width: `${70 + i * 8}%` }} />)}
+                </div>
+              )}
+              {articleError && <p className="text-xs text-red-500">{articleError}</p>}
+              {article && article.contents.map((block, i) => (
+                <ArticleBlockRenderer key={i} block={block} onImageClick={onImageClick} />
+              ))}
+            </div>
+          )}
+
+          <div className="mt-2.5 flex items-center gap-4 text-sm text-gray-400">
+            <span className="flex items-center gap-1"><Heart className="h-3.5 w-3.5" />{formatCount(tweet.likeCount)}</span>
+            <span className="flex items-center gap-1"><MessageCircle className="h-3.5 w-3.5" />{formatCount(tweet.replyCount)}</span>
+            {tweet.viewCount > 0 && (
+              <span className="flex items-center gap-1"><Eye className="h-3.5 w-3.5" />{formatCount(tweet.viewCount)}</span>
+            )}
+            <button
+              className="ml-auto inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1.5 text-emerald-600 hover:bg-emerald-50 active:scale-95 touch-manipulation transition-transform"
+              onClick={(e) => { e.stopPropagation(); onAiClick() }}
+              aria-label="推文分析"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              <span className="text-sm font-medium">推文分析</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </article>
   )
 }

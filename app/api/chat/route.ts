@@ -24,7 +24,7 @@ export async function POST(request: Request) {
 
     const systemPrompt = `You are ${sceneMeta.aiRole}.
 
-Tweet content (for reference):
+The following is the COMPLETE, FULL text of the tweet the user is asking about. This is not an excerpt — it is the entire tweet:
 ${sceneMeta.context}
 
 Guidelines:

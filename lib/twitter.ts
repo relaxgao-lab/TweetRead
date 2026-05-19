@@ -39,6 +39,36 @@ export interface TweetsResponse {
   nextCursor?: string
 }
 
+export interface ArticleInlineStyle {
+  offset: number
+  length: number
+  style: "Bold" | "Italic"
+}
+
+export interface ArticleBlock {
+  type: "unstyled" | "header-two" | "header-three" | "image" | "divider" | "blockquote" | "ordered-list-item" | "unordered-list-item"
+  text?: string
+  url?: string
+  width?: number
+  height?: number
+  inlineStyleRanges?: ArticleInlineStyle[]
+}
+
+export interface Article {
+  id: string
+  tweetId: string
+  title: string
+  previewText: string
+  coverImageUrl?: string
+  author: TweetAuthor
+  likeCount: number
+  replyCount: number
+  quoteCount: number
+  viewCount: number
+  createdAt: string
+  contents: ArticleBlock[]
+}
+
 function getApiKey(): string {
   const key = process.env.GETXAPI_KEY
   if (!key) throw new Error("GETXAPI_KEY is not set in environment variables")
@@ -189,6 +219,62 @@ export async function fetchTweetById(id: string): Promise<Tweet | null> {
   const data = asRecord(await res.json())
   const raw = data.tweet ?? data
   return parseTweet(raw)
+}
+
+export function isArticleTweet(tweet: Tweet): boolean {
+  return /^https?:\/\/x\.com\/i\/article\//.test(tweet.text.trim())
+}
+
+export async function fetchArticle(tweetId: string): Promise<Article | null> {
+  const apiKey = getApiKey()
+  const res = await fetch(`${GETXAPI_BASE}/twitter/article/get?id=${tweetId}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    next: { revalidate: 3600 },
+  })
+
+  if (!res.ok) return null
+
+  const data = asRecord(await res.json())
+  const raw = asRecord(data.article)
+  const author = asRecord(raw.author)
+
+  const contents: ArticleBlock[] = Array.isArray(raw.contents)
+    ? (raw.contents as unknown[]).map((b) => {
+        const block = asRecord(b)
+        return {
+          type: (block.type as ArticleBlock["type"]) ?? "unstyled",
+          text: (block.text as string | undefined) ?? undefined,
+          url: (block.url as string | undefined) ?? undefined,
+          width: (block.width as number | undefined) ?? undefined,
+          height: (block.height as number | undefined) ?? undefined,
+          inlineStyleRanges: Array.isArray(block.inlineStyleRanges)
+            ? (block.inlineStyleRanges as ArticleInlineStyle[])
+            : undefined,
+        }
+      })
+    : []
+
+  return {
+    id: (raw.id as string | undefined) ?? "",
+    tweetId,
+    title: (raw.title as string | undefined) ?? "",
+    previewText: (raw.preview_text as string | undefined) ?? "",
+    coverImageUrl: (raw.cover_media_img_url as string | undefined) ?? undefined,
+    author: {
+      userName: (author.userName as string | undefined) ?? "",
+      name: (author.name as string | undefined) ?? "",
+      profilePicture: (author.profilePicture as string | undefined) ?? "",
+      isBlueVerified: (author.isBlueVerified as boolean | undefined) ?? false,
+      followers: (author.followers as number | undefined) ?? 0,
+      description: (author.description as string | undefined) ?? "",
+    },
+    likeCount: (raw.likeCount as number | undefined) ?? 0,
+    replyCount: (raw.replyCount as number | undefined) ?? 0,
+    quoteCount: (raw.quoteCount as number | undefined) ?? 0,
+    viewCount: (raw.viewCount as number | undefined) ?? 0,
+    createdAt: (raw.createdAt as string | undefined) ?? "",
+    contents,
+  }
 }
 
 export function formatRelativeTime(createdAt: string): string {
