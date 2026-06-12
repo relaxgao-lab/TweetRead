@@ -1,7 +1,7 @@
 import { RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 /**
- * 在文本选中期间锁定滚动容器的位置，防止拖拽扩大选区时页面跟着滚动。
+ * 文本选中期间，鼠标拖到滚动容器边缘时自动滚动，方便跨屏扩大选区。
  * 仅对桌面端鼠标操作有效，不影响手机端 touch 选文。
  */
 export function useSelectionScrollLock(scrollRef: RefObject<HTMLElement | null>) {
@@ -10,33 +10,88 @@ export function useSelectionScrollLock(scrollRef: RefObject<HTMLElement | null>)
     if (!container) return
 
     let isSelecting = false
-    let frozenTop = 0
+    let startY = 0
+    let pointerY = 0
+    let rafId: number | null = null
+    const edgeActivationPx = 36
+    const minDragBeforeScrollPx = 72
+
+    const stopAutoScroll = () => {
+      if (rafId != null) cancelAnimationFrame(rafId)
+      rafId = null
+    }
+
+    const tickAutoScroll = () => {
+      if (!isSelecting) {
+        stopAutoScroll()
+        return
+      }
+
+      const rect = container.getBoundingClientRect()
+      if (Math.abs(pointerY - startY) < minDragBeforeScrollPx) {
+        stopAutoScroll()
+        return
+      }
+
+      const edgeSize = Math.min(edgeActivationPx, Math.max(24, rect.height * 0.08))
+      const topDistance = pointerY - rect.top
+      const bottomDistance = rect.bottom - pointerY
+      let delta = 0
+
+      if (topDistance < edgeSize) {
+        const intensity = Math.min(1, Math.max(0, (edgeSize - topDistance) / edgeSize))
+        delta = -Math.ceil(4 + intensity * 18)
+      } else if (bottomDistance < edgeSize) {
+        const intensity = Math.min(1, Math.max(0, (edgeSize - bottomDistance) / edgeSize))
+        delta = Math.ceil(4 + intensity * 18)
+      }
+
+      if (delta !== 0) {
+        container.scrollTop += delta
+        rafId = requestAnimationFrame(tickAutoScroll)
+      } else {
+        stopAutoScroll()
+      }
+    }
+
+    const startAutoScroll = () => {
+      if (rafId == null) rafId = requestAnimationFrame(tickAutoScroll)
+    }
 
     const onMouseDown = (e: MouseEvent) => {
       const target = e.target as Element
       if (target.closest('.select-text')) {
         isSelecting = true
-        frozenTop = container.scrollTop
+        startY = e.clientY
+        pointerY = e.clientY
       }
     }
 
-    const onScroll = () => {
-      if (isSelecting) {
-        container.scrollTop = frozenTop
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isSelecting) return
+      pointerY = e.clientY
+      const rect = container.getBoundingClientRect()
+      const draggedFarEnough = Math.abs(pointerY - startY) >= minDragBeforeScrollPx
+      if (draggedFarEnough && (pointerY < rect.top + edgeActivationPx || pointerY > rect.bottom - edgeActivationPx)) {
+        startAutoScroll()
+      } else {
+        stopAutoScroll()
       }
     }
 
     const onMouseUp = () => {
       isSelecting = false
+      stopAutoScroll()
     }
 
     container.addEventListener('mousedown', onMouseDown)
-    container.addEventListener('scroll', onScroll)
+    document.addEventListener('mousemove', onMouseMove)
     document.addEventListener('mouseup', onMouseUp)
 
     return () => {
+      stopAutoScroll()
       container.removeEventListener('mousedown', onMouseDown)
-      container.removeEventListener('scroll', onScroll)
+      document.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mouseup', onMouseUp)
     }
   }, [scrollRef])

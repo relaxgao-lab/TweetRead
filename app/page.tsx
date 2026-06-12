@@ -6,7 +6,7 @@ import { AiPanel, SynonymClickContext, type AiMessage } from "@/components/ai-pa
 import { SelectionActionMenu } from "@/components/selection-action-menu"
 import { FloatingChatWindow } from "@/components/floating-chat-window"
 import { streamChatResponse } from "@/lib/use-chat-stream"
-import { isWordOrPhraseLookup, buildLookupPrompt } from "@/lib/prompts"
+import { isWordOrPhraseLookup, buildLookupPrompt, buildWritingStylePrompt } from "@/lib/prompts"
 import { ACCOUNTS } from "@/config/accounts"
 import type { Tweet, Article, ArticleBlock } from "@/lib/twitter"
 import { formatRelativeTime, formatCount, isArticleTweet } from "@/lib/twitter"
@@ -16,7 +16,8 @@ import {
   accumulateCommentsForTweet,
   buildCommentAnalysisPrompt,
 } from "@/lib/comment-analysis-client"
-import { Heart, Repeat2, MessageCircle, Eye, RefreshCw, ChevronDown, ChevronLeft, Sparkles, Search, X } from "lucide-react"
+import { Heart, Repeat2, MessageCircle, Eye, RefreshCw, ChevronDown, ChevronLeft, Sparkles, Search, X, LayoutGrid, LayoutList, BookOpen } from "lucide-react"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { whisperSpeechService, type SpeechStatus } from "@/app/conversation/whisper-speech-service"
 
@@ -37,7 +38,7 @@ type SheetState = "hidden" | "half" | "full"
 type TweetCache = Record<string, { tweets: Tweet[]; hasMore: boolean; nextCursor?: string; loadedAt: number }>
 type SelectionMode = "wordOrPhrase" | "sentenceOrPassage"
 type SelectionSource = "tweet" | "assistantReply"
-type SelectionActionId = "lookup" | "pattern" | "patternMastery" | "readAloud" | "explainReply" | "translateReply" | "quoteReply"
+type SelectionActionId = "lookup" | "pattern" | "patternMastery" | "writingStyle" | "readAloud" | "explainReply" | "translateReply" | "quoteReply"
 type SelectionAction = {
   id: SelectionActionId
   label: string
@@ -267,20 +268,22 @@ const SELECTION_ACTIONS: Record<SelectionActionId, SelectionAction> = {
   lookup: { id: "lookup", label: "查词", buildPrompt: buildLookupPrompt, maxTokens: 1500 },
   pattern: { id: "pattern", label: "句型讲解", buildPrompt: buildPatternPrompt, maxTokens: 2500 },
   patternMastery: { id: "patternMastery", label: "句型掌握", buildPrompt: buildPatternMasteryPrompt, maxTokens: 2000 },
+  writingStyle: { id: "writingStyle", label: "写法解析", buildPrompt: buildWritingStylePrompt, maxTokens: 1800 },
   explainReply: { id: "explainReply", label: "解释", buildDraft: () => buildAssistantDraft("explainReply"), maxTokens: 2000 },
   translateReply: { id: "translateReply", label: "翻译", buildDraft: () => buildAssistantDraft("translateReply"), maxTokens: 2000 },
   quoteReply: { id: "quoteReply", label: "引用", buildDraft: () => "" },
   readAloud: { id: "readAloud", label: "朗读" },
 }
 
-const PRIMARY_SELECTION_ACTIONS: SelectionActionId[] = ["lookup", "patternMastery", "explainReply", "translateReply", "quoteReply", "readAloud"]
+const PRIMARY_SELECTION_ACTIONS: SelectionActionId[] = ["lookup", "writingStyle", "patternMastery", "explainReply", "translateReply", "quoteReply", "readAloud"]
 
-type SelectionPromptWindowActionId = Extract<SelectionActionId, "lookup" | "patternMastery">
+type SelectionPromptWindowActionId = Extract<SelectionActionId, "lookup" | "patternMastery" | "writingStyle">
 
 function formatSelectionPromptWindowDisplay(actionId: SelectionPromptWindowActionId, text: string): string {
   const labels: Record<SelectionPromptWindowActionId, string> = {
     lookup: "查词",
     patternMastery: "句型掌握",
+    writingStyle: "写法解析",
   }
   return `${labels[actionId]}：「${text}」`
 }
@@ -291,6 +294,17 @@ function getPrimaryActions(_menu: SelectionMenuState): SelectionAction[] {
 
 // ─── 页面组件 ──────────────────────────────────────────────────────────────────
 export default function HomePage() {
+  const router = useRouter()
+  // ── 显示模式 ──
+  const [viewMode, setViewMode] = useState<"read" | "scan">("read")
+  useEffect(() => {
+    const saved = localStorage.getItem("home-view-mode")
+    if (saved === "read" || saved === "scan") setViewMode(saved)
+  }, [])
+  const switchViewMode = (mode: "read" | "scan") => {
+    setViewMode(mode)
+    localStorage.setItem("home-view-mode", mode)
+  }
   // ── 推文 feed ──
   const [activeTab, setActiveTab] = useState(ACCOUNTS[0].userName)
   const [cache, setCache] = useState<TweetCache>({})
@@ -1300,7 +1314,7 @@ export default function HomePage() {
     }
 
     if (selection.source === "assistantReply") {
-      if (actionId === "lookup" || actionId === "patternMastery") {
+      if (actionId === "lookup" || actionId === "patternMastery" || actionId === "writingStyle") {
         const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text, tweet.text)
         if (!prompt) return
         const displayContent = formatSelectionPromptWindowDisplay(actionId, text)
@@ -1346,7 +1360,7 @@ export default function HomePage() {
       return
     }
 
-    if (actionId === "lookup" || actionId === "patternMastery") {
+    if (actionId === "lookup" || actionId === "patternMastery" || actionId === "writingStyle") {
       const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text, tweet.text)
       if (!prompt) return
       const displayContent = formatSelectionPromptWindowDisplay(actionId, text)
@@ -1499,6 +1513,30 @@ export default function HomePage() {
               </button>
             ))}
           </div>
+          <div className="flex items-center rounded-md border border-gray-200 overflow-hidden shrink-0">
+            <button
+              onClick={() => switchViewMode("read")}
+              className={`p-1.5 transition-colors ${viewMode === "read" ? "bg-gray-900 text-white" : "text-gray-400 hover:bg-gray-100"}`}
+              title="精读模式"
+            >
+              <LayoutList className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => switchViewMode("scan")}
+              className={`p-1.5 transition-colors ${viewMode === "scan" ? "bg-gray-900 text-white" : "text-gray-400 hover:bg-gray-100"}`}
+              title="速览模式"
+            >
+              <LayoutGrid className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <Button
+            variant="ghost" size="icon"
+            onClick={() => router.push(`/read?user=${activeTab}`)}
+            className="text-gray-500 hover:text-gray-900 shrink-0"
+            title="从早到晚阅读"
+          >
+            <BookOpen className="h-4 w-4" />
+          </Button>
           <Button
             variant="ghost" size="icon"
             onClick={() => loadTweets(activeTab, undefined, true)}
@@ -1564,7 +1602,7 @@ export default function HomePage() {
                 )}
               </div>
               <div ref={feedScrollRef} className="flex-1 overflow-y-auto overscroll-none hide-vertical-scrollbar min-h-0">
-                <div className="max-w-3xl mx-auto" style={{ paddingBottom: isMobile ? "env(safe-area-inset-bottom, 16px)" : undefined }}>
+                <div className={viewMode === "scan" ? "w-full" : "max-w-3xl mx-auto"} style={{ paddingBottom: isMobile ? "env(safe-area-inset-bottom, 16px)" : undefined }}>
                   {(isSearchMode ? searchError : error) && (
                     <div className="mx-4 mt-4 p-3 bg-red-50/90 border border-red-200 rounded-lg text-sm text-red-700 flex justify-between items-center">
                       <span>{isSearchMode ? searchError : error}</span>
@@ -1595,7 +1633,32 @@ export default function HomePage() {
                     </div>
                   )}
 
-                  <div className="divide-y divide-gray-100/80">
+                  <div className={viewMode === "scan" ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 p-3" : "hidden"}>
+                      {displayTweets.map((tweet) => (
+                        <button
+                          key={tweet.id}
+                          onClick={() => handleOpenDetail(tweet)}
+                          className="flex flex-col gap-1.5 px-3 py-2.5 bg-white rounded-xl border border-gray-200 hover:border-gray-300 hover:shadow-md text-left transition-all cursor-pointer"
+                        >
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            {tweet.author.profilePicture ? (
+                              <img src={tweet.author.profilePicture} alt="" className="h-5 w-5 rounded-full shrink-0 object-cover" />
+                            ) : (
+                              <div className="h-5 w-5 rounded-full shrink-0 bg-gray-200" />
+                            )}
+                            <span className="text-xs font-medium text-gray-500 truncate">
+                              @{tweet.author.userName}
+                            </span>
+                            <span className="text-xs text-gray-300 shrink-0">·</span>
+                            <span className="text-xs text-gray-400 shrink-0">{formatRelativeTime(tweet.createdAt)}</span>
+                          </div>
+                          <p className="text-sm leading-snug line-clamp-2 text-gray-800">
+                            {tweet.text}
+                          </p>
+                        </button>
+                      ))}
+                  </div>
+                  <div className={viewMode === "read" ? "divide-y divide-gray-100/80" : "hidden"}>
                     {displayTweets.map((tweet, idx) =>
                       isArticleTweet(tweet) ? (
                         <ArticleCard
