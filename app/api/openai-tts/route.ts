@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 
-export const runtime = 'edge';
+export const runtime = 'nodejs';
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'OpenAI TTS error'

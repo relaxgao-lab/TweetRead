@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { Suspense, useState, useCallback, useEffect, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { ArrowLeft, ChevronDown, Heart, MessageCircle, Eye } from 'lucide-react'
 import Image from 'next/image'
@@ -95,8 +95,26 @@ function Skeleton() {
   )
 }
 
+function ReadPageFallback() {
+  return (
+    <div className="h-[var(--app-height)] flex flex-col bg-background overflow-hidden">
+      <header className="sticky top-0 z-20 shrink-0 bg-white/80 border-b border-gray-200 shadow-sm backdrop-blur-sm">
+        <div className="max-w-3xl mx-auto px-4 py-2.5 flex items-center gap-3">
+          <div className="h-7 w-7 rounded-md bg-gray-100" />
+          <div className="h-5 w-32 rounded bg-gray-100" />
+        </div>
+      </header>
+      <div className="flex-1 overflow-y-auto overscroll-none">
+        <div className="max-w-3xl mx-auto">
+          <Skeleton />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── 主页面 ───────────────────────────────────────────────────────────────────
-export default function ReadPage() {
+function ReadPageContent() {
   const searchParams = useSearchParams()
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -198,5 +216,13 @@ export default function ReadPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function ReadPage() {
+  return (
+    <Suspense fallback={<ReadPageFallback />}>
+      <ReadPageContent />
+    </Suspense>
   )
 }
