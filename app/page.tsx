@@ -480,6 +480,20 @@ export default function HomePage() {
     const el = feedScrollRef.current
     if (!el) return
 
+    const hasActiveTextSelection = () => {
+      const sel = window.getSelection()
+      if (!sel || sel.isCollapsed || !sel.toString().trim() || sel.rangeCount === 0) return false
+      try {
+        return el.contains(sel.getRangeAt(0).commonAncestorContainer)
+      } catch {
+        return false
+      }
+    }
+
+    const isSelectableTextTarget = (target: EventTarget | null) => {
+      return target instanceof Element && target.closest(".select-text") != null
+    }
+
     const scrollFeed = (deltaY: number) => {
       const noOverflow = el.scrollHeight <= el.clientHeight
       const { scrollTop, scrollHeight, clientHeight } = el
@@ -547,7 +561,8 @@ export default function HomePage() {
     let touchWasOnSelectableText = false
     const touchHandler = (e: TouchEvent) => {
       if (e.type === "touchend") {
-        if (touchWasInside) runMomentum()
+        if (touchWasInside && !touchWasOnSelectableText && !hasActiveTextSelection()) runMomentum()
+        touchWasOnSelectableText = false
         return
       }
       if (e.touches.length !== 1) return
@@ -562,14 +577,14 @@ export default function HomePage() {
       if (!inside) return
       const touchY = touch.clientY
       if (e.type === "touchstart") {
-        touchWasOnSelectableText = (target as HTMLElement).closest?.(".select-text") != null
+        touchWasOnSelectableText = isSelectableTextTarget(e.target) || hasActiveTextSelection()
         touchStartY = touchY
         velocityBuffer.length = 0
         cancelAnimationFrame(momentumRaf)
         return
       }
       if (e.type === "touchmove") {
-        if (touchWasOnSelectableText) return
+        if (touchWasOnSelectableText || hasActiveTextSelection()) return
         const deltaY = touchStartY - touchY
         touchStartY = touchY
         const didScroll = scrollFeed(deltaY)
@@ -583,6 +598,7 @@ export default function HomePage() {
 
     let mouseStartY = 0
     let isMouseDownOnFeed = false
+    let mouseWasOnSelectableText = false
     const mouseDownHandler = (e: MouseEvent) => {
       const target = e.target as Node
       let inside = el.contains(target)
@@ -592,20 +608,23 @@ export default function HomePage() {
       }
       if (!inside) return
       isMouseDownOnFeed = true
+      mouseWasOnSelectableText = isSelectableTextTarget(e.target) || hasActiveTextSelection()
       mouseStartY = e.clientY
       velocityBuffer.length = 0
       cancelAnimationFrame(momentumRaf)
     }
     const mouseMoveHandler = (e: MouseEvent) => {
       if (!isMouseDownOnFeed || e.buttons !== 1) return
+      if (mouseWasOnSelectableText || hasActiveTextSelection()) return
       const deltaY = mouseStartY - e.clientY
       mouseStartY = e.clientY
       const didScroll = scrollFeed(deltaY)
       if (didScroll) pushVelocity(deltaY)
     }
     const mouseUpHandler = () => {
-      if (isMouseDownOnFeed) runMomentum()
+      if (isMouseDownOnFeed && !mouseWasOnSelectableText && !hasActiveTextSelection()) runMomentum()
       isMouseDownOnFeed = false
+      mouseWasOnSelectableText = false
     }
 
     const opts = { passive: false } as AddEventListenerOptions
