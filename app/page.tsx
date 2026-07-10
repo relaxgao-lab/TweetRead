@@ -6,7 +6,7 @@ import { AiPanel, SynonymClickContext, type AiMessage } from "@/components/ai-pa
 import { SelectionActionMenu } from "@/components/selection-action-menu"
 import { FloatingChatWindow } from "@/components/floating-chat-window"
 import { streamChatResponse } from "@/lib/use-chat-stream"
-import { isWordOrPhraseLookup, buildLookupPrompt, buildWritingStylePrompt } from "@/lib/prompts"
+import { isWordOrPhraseLookup, buildLookupPrompt } from "@/lib/prompts"
 import { ACCOUNTS } from "@/config/accounts"
 import type { Tweet, Article, ArticleBlock } from "@/lib/twitter"
 import { formatRelativeTime, formatCount, isArticleTweet } from "@/lib/twitter"
@@ -38,7 +38,7 @@ type SheetState = "hidden" | "half" | "full"
 type TweetCache = Record<string, { tweets: Tweet[]; hasMore: boolean; nextCursor?: string; loadedAt: number }>
 type SelectionMode = "wordOrPhrase" | "sentenceOrPassage"
 type SelectionSource = "tweet" | "assistantReply"
-type SelectionActionId = "lookup" | "pattern" | "patternMastery" | "writingStyle" | "readAloud" | "explainReply" | "translateReply" | "quoteReply"
+type SelectionActionId = "lookup" | "pattern" | "patternMastery" | "beginnerSentence" | "readAloud" | "explainReply" | "translateReply" | "quoteReply"
 type SelectionAction = {
   id: SelectionActionId
   label: string
@@ -223,6 +223,182 @@ Do not add separate sections for full-sentence paraphrase, keyword glossary, or 
 **Formatting**: Use clean Markdown — headings, bullet lists, and bold emphasis are encouraged. Code blocks are only for actual code; never use them for annotations or regular sentences. Keep the answer concise.`
 }
 
+function buildBeginnerSentencePrompt(text: string, tweetText?: string): string {
+  const tweetBlock = tweetText ? `原推文上下文（仅用于理解语气、背景和指代）：\n「${tweetText}」\n\n` : ""
+  return `${tweetBlock}请讲解下面这段英文内容。你的目标不是翻译，而是帮助一个英语初学者真正理解英文表达方式，并知道哪些表达可以学、哪些只是社交媒体口语/不标准写法。
+
+英文内容：
+「${text}」
+
+核心要求：
+
+- 不要只翻译。
+- 重点培养英语思维：多解释为什么这样说，而不是只告诉我是什么意思。
+- 如果原文是 Twitter/Reddit/聊天里的碎片化英语、语法不完整或不标准，必须明确指出。
+- 发现不标准写法时，不要羞辱原文；请解释这是社媒口语、快速输入、省略、断句随意，还是作者故意制造语气。
+- 遇到“形式和真实功能不一致”的非常规用法，必须明确说明。例如：形式上像疑问句，但实际是在自言自语、反问、表达直觉、铺垫观点；形式上像陈述句，但实际是在讽刺、调侃或暗示。
+- 必须告诉初学者：哪些表达可以放心模仿，哪些表达只能看懂、不建议正式写作模仿。
+- 尽量结合美国人的真实说话习惯。
+- 如果涉及财经、AI、科技、投资，请结合行业背景讲解。
+- 解释要适合英语初学者阅读，避免复杂语法术语；如果必须提到语法名称，要马上用中文白话解释。
+
+请按照下面的顺序回答：
+
+## 1. 原文
+保留英文原文。
+
+## 2. 先判断：这句英文标准吗？
+
+先用很短的方式判断：
+
+- 这是标准书面英语、自然口语，还是社媒碎片化英语？
+- 有没有省略、断句问题、介词缺失、搭配不自然、大小写/标点问题？
+- 有没有“非常规用法”：比如疑问句不是真的提问，而是在表达直觉/怀疑/讽刺；句子断开不是完整语法，而是为了制造口语节奏。
+- 初学者是否可以直接模仿？如果不能，请明确说“可以看懂，但不要照抄这种写法”。
+
+如果原文不够标准，请给出两种改写：
+
+1. 标准英文写法：语法更完整、适合学习者模仿。
+2. 保留原推文语气的自然写法：仍然像美国网友会发的内容，但更顺。
+
+## 3. 一句话中文翻译
+用自然、符合中文表达习惯的话翻译整句话。
+
+## 4. 一句一句拆解
+把句子按照意群（而不是单词）拆开。
+
+例如：
+
+Why do I have this weird feeling...
+→ 为什么我总有一种奇怪的感觉……
+
+the main reason retail is excited...
+→ 散户如此兴奋的主要原因……
+
+SK Hynix NASDAQ listing
+→ SK海力士在纳斯达克上市
+
+is because...
+→ 是因为……
+
+instead of...
+→ 而不是……
+
+每一部分都解释为什么这么表达，并特别指出：
+
+- 这里是否省略了某个词（例如 about / that / is that 等）
+- 这里的句子形式和真实作用是否一致；如果不一致，要用“形式上是……，实际功能是……”解释清楚
+- 这里是否是美股/科技圈常见说法
+- 这里是否是可以模仿的地道表达，还是只适合看懂
+
+特别注意这类初学者高频误解：
+
+- "Why do I have this feeling..." / "Why do I feel like..." 形式上是疑问句，但很多时候不是认真求答案，而是“我怎么总觉得……/我有一种直觉……”。
+- "Is because..." 单独开头通常不是标准完整句，而是社媒口语里把原因单独拎出来强调。
+- 省略 about / that / is that / because 等连接词时，要告诉用户标准写法应该补什么。
+
+## 5. 重点词汇
+
+列出重要单词或短语。
+
+格式：
+
+- retail = retail investors，散户投资者
+- degen = 赌博式投机者（网络俚语）
+- call options = 看涨期权
+- weird feeling = 一种说不上来的感觉
+
+如果有俚语、金融术语、互联网黑话，也请解释来源和使用场景。
+
+## 6. 语法分析
+
+不要讲复杂语法名称，而是告诉我：
+
+- 主语是什么
+- 谓语是什么
+- 宾语是什么
+- 修饰关系是什么
+- 为什么作者会这样写
+- 如果我是中国人，最容易误解哪里
+
+要求：
+
+- 如果原句语法不完整，必须先用“标准英文改写”来分析主干。
+- 分清“原句实际写法”和“标准英文里应该怎么写”。
+- 不要把宾语误说成主语；如果句子里有“我觉得/我有一种感觉 that...”，要解释外层是“我有这种感觉”，内层才是真正观点。
+- 尽量用中文解释，不要堆英语语法术语。
+
+## 7. 作者真正想表达什么
+
+很多英文不是字面意思。
+
+请解释：
+
+- 作者真正的观点
+- 有没有讽刺、调侃、自嘲
+- 情绪是什么
+- 为什么美国网友会这么说
+
+如果涉及金融、科技、投资背景，请补充背景知识。
+
+## 8. 地道表达：哪些值得学？
+
+把原文里值得学习的表达列出来。每个表达都要说明：
+
+- 自然中文意思
+- 使用场景
+- 是否适合初学者模仿
+- 更标准/更自然的表达方式
+
+例如：
+
+I have this weird feeling...
+这是英语里非常自然的表达，
+意思不是"我有一种奇怪感觉"，而是
+"我总觉得……"
+
+至少举 2-3 个类似例句。例句要短，适合初学者复用。
+
+如果原文里有不推荐模仿的表达，也单独列出：
+
+- 原文写法
+- 为什么不建议模仿
+- 推荐替代表达
+
+## 9. 如果换成更简单的英文
+
+把原句改写成：
+
+- 初级英语（A2）
+- 中级英语（B1）
+- 标准自然英语
+- 保留社媒语气的自然英语
+
+让我知道不同水平的人会怎么表达。
+
+## 10. 学习总结
+
+最后总结：
+
+① 今天最值得记住的3个表达。
+
+② 最容易犯错的地方。
+
+③ 我以后看到什么句型，可以马上联想到今天学到的知识。
+
+④ 哪些原文写法“能看懂但不要模仿”。
+
+输出质量自检：
+
+- 是否明确判断了原文是否标准？
+- 是否给出“标准英文写法”和“保留原语气的自然写法”？
+- 是否指出了省略、断句或搭配不自然的地方？
+- 是否告诉初学者哪些表达可以模仿，哪些不要模仿？
+- 语法分析是否基于标准改写，且没有把主语/宾语说错？
+- 是否结合了真实美国社媒语气和相关行业背景？
+- 如果没有做到以上任何一点，请补齐后再回答。`
+}
+
 function buildAssistantDraft(actionId: SelectionActionId): string {
   switch (actionId) {
     case "explainReply":
@@ -268,22 +444,22 @@ const SELECTION_ACTIONS: Record<SelectionActionId, SelectionAction> = {
   lookup: { id: "lookup", label: "查词", buildPrompt: buildLookupPrompt, maxTokens: 1500 },
   pattern: { id: "pattern", label: "句型讲解", buildPrompt: buildPatternPrompt, maxTokens: 2500 },
   patternMastery: { id: "patternMastery", label: "句型掌握", buildPrompt: buildPatternMasteryPrompt, maxTokens: 2000 },
-  writingStyle: { id: "writingStyle", label: "写法解析", buildPrompt: buildWritingStylePrompt, maxTokens: 1800 },
+  beginnerSentence: { id: "beginnerSentence", label: "初学者讲解", buildPrompt: buildBeginnerSentencePrompt, maxTokens: 3500 },
   explainReply: { id: "explainReply", label: "解释", buildDraft: () => buildAssistantDraft("explainReply"), maxTokens: 2000 },
   translateReply: { id: "translateReply", label: "翻译", buildDraft: () => buildAssistantDraft("translateReply"), maxTokens: 2000 },
   quoteReply: { id: "quoteReply", label: "引用", buildDraft: () => "" },
   readAloud: { id: "readAloud", label: "朗读" },
 }
 
-const PRIMARY_SELECTION_ACTIONS: SelectionActionId[] = ["lookup", "writingStyle", "patternMastery", "explainReply", "translateReply", "quoteReply", "readAloud"]
+const PRIMARY_SELECTION_ACTIONS: SelectionActionId[] = ["lookup", "beginnerSentence", "patternMastery", "explainReply", "translateReply", "quoteReply", "readAloud"]
 
-type SelectionPromptWindowActionId = Extract<SelectionActionId, "lookup" | "patternMastery" | "writingStyle">
+type SelectionPromptWindowActionId = Extract<SelectionActionId, "lookup" | "beginnerSentence" | "patternMastery">
 
 function formatSelectionPromptWindowDisplay(actionId: SelectionPromptWindowActionId, text: string): string {
   const labels: Record<SelectionPromptWindowActionId, string> = {
     lookup: "查词",
+    beginnerSentence: "初学者讲解",
     patternMastery: "句型掌握",
-    writingStyle: "写法解析",
   }
   return `${labels[actionId]}：「${text}」`
 }
@@ -1333,7 +1509,7 @@ export default function HomePage() {
     }
 
     if (selection.source === "assistantReply") {
-      if (actionId === "lookup" || actionId === "patternMastery" || actionId === "writingStyle") {
+      if (actionId === "lookup" || actionId === "beginnerSentence" || actionId === "patternMastery") {
         const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text, tweet.text)
         if (!prompt) return
         const displayContent = formatSelectionPromptWindowDisplay(actionId, text)
@@ -1379,7 +1555,7 @@ export default function HomePage() {
       return
     }
 
-    if (actionId === "lookup" || actionId === "patternMastery" || actionId === "writingStyle") {
+    if (actionId === "lookup" || actionId === "beginnerSentence" || actionId === "patternMastery") {
       const prompt = SELECTION_ACTIONS[actionId].buildPrompt?.(text, tweet.text)
       if (!prompt) return
       const displayContent = formatSelectionPromptWindowDisplay(actionId, text)
