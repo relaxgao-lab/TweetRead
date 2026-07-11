@@ -7,14 +7,17 @@ const PROMPT_BODY_MAX_CHARS = 45_000
 export async function fetchTweetCommentsPage(
   tweetId: string,
   cursor?: string,
-): Promise<{ comments: Tweet[]; hasMore: boolean; nextCursor: string | undefined }> {
+  authorUserName?: string,
+): Promise<{ comments: Tweet[]; authorReplies: Tweet[]; hasMore: boolean; nextCursor: string | undefined }> {
   const params = new URLSearchParams({ id: tweetId })
+  if (authorUserName) params.set("authorUserName", authorUserName)
   if (cursor) params.set("cursor", cursor)
   const res = await fetch(`/api/tweet-conversation?${params.toString()}`, { cache: "no-store" })
   if (!res.ok) throw new Error(`评论接口 ${res.status}`)
   const data = await res.json()
   return {
     comments: (data.comments ?? []) as Tweet[],
+    authorReplies: (data.authorReplies ?? []) as Tweet[],
     hasMore: Boolean(data.hasMore),
     nextCursor: data.nextCursor as string | undefined,
   }
@@ -31,9 +34,10 @@ export type CommentAccumulateStart = {
 export async function accumulateCommentsForTweet(
   tweetId: string,
   start: CommentAccumulateStart,
-  options?: { maxPages?: number; maxComments?: number },
+  options?: { maxPages?: number; maxComments?: number; authorUserName?: string },
 ): Promise<{
   comments: Tweet[]
+  authorReplies: Tweet[]
   hasMore: boolean
   nextCursor: string | undefined
   hitCap: boolean
@@ -52,15 +56,17 @@ export async function accumulateCommentsForTweet(
   }
 
   if (!hasMore) {
-    return { comments: list, hasMore: false, nextCursor: cursor, hitCap: false }
+    return { comments: list, authorReplies: [], hasMore: false, nextCursor: cursor, hitCap: false }
   }
 
   let pages = 0
   let hitCap = false
+  let authorReplies: Tweet[] = []
 
   while (hasMore && pages < maxPages && list.length < maxComments) {
-    const page = await fetchTweetCommentsPage(tweetId, cursor)
+    const page = await fetchTweetCommentsPage(tweetId, cursor, options?.authorUserName)
     pages += 1
+    if (!start.tweetMatches && pages === 1) authorReplies = page.authorReplies
     const room = maxComments - list.length
     const slice = page.comments.slice(0, room)
     list = [...list, ...slice]
@@ -80,7 +86,7 @@ export async function accumulateCommentsForTweet(
 
   if (pages >= maxPages && hasMore) hitCap = true
 
-  return { comments: list, hasMore, nextCursor: cursor, hitCap }
+  return { comments: list, authorReplies, hasMore, nextCursor: cursor, hitCap }
 }
 
 function formatOneComment(c: Tweet, index: number): string {

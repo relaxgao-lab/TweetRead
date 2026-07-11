@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation"
 
 import type { Tweet } from "@/lib/twitter"
-import { fetchTweetById, fetchTweetConversation } from "@/lib/twitter"
+import { fetchTweetAuthorReplies, fetchTweetById, fetchTweetConversation } from "@/lib/twitter"
 import { TweetDetailShell } from "@/app/tweet/TweetDetailShell"
 
 type PageProps = {
@@ -23,6 +23,7 @@ export default async function TweetDetailPage({ params }: PageProps) {
   }
 
   let initialComments: Tweet[] = []
+  let initialAuthorReplies: Tweet[] = []
   let initialCommentsHasMore = false
   let initialCommentsCursor: string | undefined
 
@@ -35,14 +36,20 @@ export default async function TweetDetailPage({ params }: PageProps) {
     // 评论加载失败时允许页面仍然渲染，只是没有初始评论
   }
 
+  try {
+    initialAuthorReplies = await fetchTweetAuthorReplies(id, rootTweet.author.userName)
+  } catch {
+    // 作者回复加载失败时只隐藏作者回复区
+  }
+
   return (
     <TweetDetailShell
       key={rootTweet.id}
       rootTweet={rootTweet}
       initialComments={initialComments}
+      initialAuthorReplies={initialAuthorReplies}
       initialCommentsHasMore={initialCommentsHasMore}
       initialCommentsCursor={initialCommentsCursor}
     />
   )
 }
-

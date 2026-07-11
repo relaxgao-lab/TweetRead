@@ -181,6 +181,52 @@ export async function fetchTweetConversation(tweetId: string, cursor?: string): 
   }
 }
 
+export async function fetchTweetAuthorReplies(
+  tweetId: string,
+  authorUserName: string,
+  options?: { maxReplies?: number; maxPages?: number },
+): Promise<Tweet[]> {
+  const apiKey = getApiKey()
+  const maxReplies = options?.maxReplies ?? 20
+  const maxPages = options?.maxPages ?? 2
+  const q = `conversation_id:${tweetId} from:${authorUserName}`
+  let cursor: string | undefined
+  let pages = 0
+  const replies: Tweet[] = []
+  const seen = new Set<string>()
+
+  while (pages < maxPages && replies.length < maxReplies) {
+    const params = new URLSearchParams({ q, product: "Latest" })
+    if (cursor) params.set("cursor", cursor)
+
+    const res = await fetch(`${GETXAPI_BASE}/twitter/tweet/advanced_search?${params}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      cache: "no-store",
+    })
+
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`GetXAPI author replies error ${res.status}: ${err}`)
+    }
+
+    const data = asRecord(await res.json())
+    const rawTweets = Array.isArray(data.tweets) ? data.tweets : []
+    for (const tweet of rawTweets.map(parseTweet)) {
+      if (!tweet.id || tweet.id === tweetId || seen.has(tweet.id)) continue
+      seen.add(tweet.id)
+      replies.push(tweet)
+      if (replies.length >= maxReplies) break
+    }
+
+    pages += 1
+    const hasMore = (data.has_more as boolean | undefined) ?? !!(data.next_cursor)
+    cursor = (data.next_cursor as string | undefined) ?? undefined
+    if (!hasMore || !cursor) break
+  }
+
+  return replies
+}
+
 export async function searchUserTweets(userName: string, query: string, cursor?: string): Promise<TweetsResponse> {
   const apiKey = getApiKey()
   const q = `from:${userName} ${query}`

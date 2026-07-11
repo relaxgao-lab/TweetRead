@@ -3,9 +3,9 @@
 import React, { useCallback, useEffect, useRef, useState } from "react"
 import Image from "next/image"
 import Link from "next/link"
-import { ChevronDown, RefreshCw, Sparkles } from "lucide-react"
+import { Sparkles } from "lucide-react"
 
-import type { Tweet } from "@/lib/twitter"
+import type { Tweet, TweetMedia } from "@/lib/twitter"
 import { formatRelativeTime, formatCount } from "@/lib/twitter"
 import { useSelectionScrollLock } from "@/lib/hooks"
 import {
@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button"
 type Props = {
   rootTweet: Tweet
   initialComments: Tweet[]
+  initialAuthorReplies: Tweet[]
   initialCommentsHasMore: boolean
   initialCommentsCursor?: string
 }
@@ -29,6 +30,28 @@ function smartCase(text: string): string {
   const upperRatio = (text.match(/[A-Z]/g)?.length ?? 0) / alpha.length
   if (upperRatio < 0.7) return text
   return text.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase())
+}
+
+function TweetMediaPreview({ media }: { media: TweetMedia[] }) {
+  const item = media.find((m) => m.url || m.previewUrl)
+  if (!item) return null
+
+  const src = item.url ?? item.previewUrl
+  if (!src) return null
+
+  const isPlayable = item.type === "video" || item.type === "animated_gif"
+  return (
+    <div className="mt-2 max-w-sm overflow-hidden rounded-lg border border-gray-200/80 bg-gray-50">
+      <div className="relative">
+        <img src={src} alt="" className="max-h-40 w-full object-cover" loading="lazy" />
+        {isPlayable && (
+          <span className="absolute bottom-2 left-2 rounded-full bg-black/65 px-2 py-0.5 text-[11px] font-medium text-white">
+            {item.type === "animated_gif" ? "GIF" : "Video"}
+          </span>
+        )}
+      </div>
+    </div>
+  )
 }
 
 function detailSceneMeta(tweet: Tweet) {
@@ -43,6 +66,7 @@ function detailSceneMeta(tweet: Tweet) {
 export function TweetDetailShell({
   rootTweet,
   initialComments,
+  initialAuthorReplies,
   initialCommentsHasMore,
   initialCommentsCursor,
 }: Props) {
@@ -63,6 +87,7 @@ export function TweetDetailShell({
 
   // 评论列表 state
   const [comments, setComments] = useState<Tweet[]>(initialComments)
+  const [authorReplies] = useState<Tweet[]>(initialAuthorReplies)
   const [commentsHasMore, setCommentsHasMore] = useState(initialCommentsHasMore)
   const [commentsCursor, setCommentsCursor] = useState<string | undefined>(initialCommentsCursor)
   const [commentsLoading, setCommentsLoading] = useState(false)
@@ -263,7 +288,7 @@ export function TweetDetailShell({
       let hitCap = false
 
       if (!needFetch) {
-        finalList = comments
+        finalList = authorReplies
         await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
       } else {
         setCommentsError(null)
@@ -274,8 +299,10 @@ export function TweetDetailShell({
             cursor: commentsCursor,
             hasMore: commentsHasMore,
             tweetMatches: true,
+          }, {
+            authorUserName: rootTweet.author.userName,
           })
-          finalList = result.comments
+          finalList = authorReplies
           hitCap = result.hitCap
           setComments(result.comments)
           setCommentsHasMore(result.hasMore)
@@ -307,6 +334,7 @@ export function TweetDetailShell({
     commentAnalysisPrefetching,
     speechStatus,
     comments,
+    authorReplies,
     commentsHasMore,
     commentsCursor,
     rootTweet,
@@ -357,6 +385,7 @@ export function TweetDetailShell({
     setCommentsLoading(true)
     try {
       const params = new URLSearchParams({ id: rootTweet.id })
+      params.set("authorUserName", rootTweet.author.userName)
       params.set("cursor", commentsCursor)
       const res = await fetch(`/api/tweet-conversation?${params.toString()}`, { cache: "no-store" })
       if (!res.ok) throw new Error(`Error ${res.status}`)
@@ -436,49 +465,54 @@ export function TweetDetailShell({
                 </div>
               </article>
 
-              {/* 评论列表 */}
+              {/* 作者回复列表 */}
               <div className="bg-white/80 rounded-2xl border border-gray-200/80 overflow-hidden">
-                <div className="px-4 py-3 border-b border-gray-100 text-sm font-medium text-gray-700">评论</div>
-                <div className="divide-y divide-gray-100">
-                  {comments.map((c) => (
-                    <div key={c.id} className="px-4 py-3 text-sm">
-                      <div className="flex gap-3">
-                        <div className="shrink-0">
-                          {c.author.profilePicture ? (
-                            <Image
-                              src={c.author.profilePicture}
-                              alt={c.author.name}
-                              width={32}
-                              height={32}
-                              className="w-8 h-8 rounded-full object-cover"
-                              unoptimized
-                            />
-                          ) : (
-                            <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 text-xs font-bold">
-                              {c.author.name?.[0] ?? "?"}
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-baseline gap-1.5 flex-wrap">
-                            <span className="font-medium text-gray-900 truncate">{c.author.name}</span>
-                            <span className="text-xs text-gray-400 shrink-0">@{c.author.userName}</span>
-                            <span className="text-xs text-gray-300 shrink-0">·</span>
-                            <span className="text-xs text-gray-400 shrink-0">
-                              {formatRelativeTime(c.createdAt)}
-                            </span>
+                <div className="px-4 py-3 border-b border-gray-100 text-sm font-medium text-gray-700">作者回复</div>
+                {authorReplies.length > 0 && (
+                  <div className="border-b border-emerald-100 bg-emerald-50/70 px-4 py-3">
+                    <div className="space-y-3">
+                      {authorReplies.map((reply) => (
+                        <div key={reply.id} className="flex gap-3 text-sm">
+                          <div className="shrink-0">
+                            {reply.author.profilePicture ? (
+                              <Image
+                                src={reply.author.profilePicture}
+                                alt={reply.author.name}
+                                width={32}
+                                height={32}
+                                className="w-8 h-8 rounded-full object-cover"
+                                unoptimized
+                              />
+                            ) : (
+                              <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 text-xs font-bold">
+                                {reply.author.name?.[0] ?? "?"}
+                              </div>
+                            )}
                           </div>
-                          <p className="mt-1 text-gray-800 whitespace-pre-wrap break-words">{smartCase(c.text)}</p>
-                          {c.textZh && (
-                            <p className="mt-1 text-gray-500 whitespace-pre-wrap break-words">{c.textZh}</p>
-                          )}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-baseline gap-1.5 flex-wrap">
+                              <span className="font-medium text-gray-900 truncate">{reply.author.name}</span>
+                              <span className="text-xs text-gray-400 shrink-0">@{reply.author.userName}</span>
+                              <span className="text-xs rounded-full bg-emerald-100 px-1.5 py-0.5 text-emerald-700 shrink-0">作者</span>
+                              <span className="text-xs text-gray-300 shrink-0">·</span>
+                              <span className="text-xs text-gray-400 shrink-0">
+                                {formatRelativeTime(reply.createdAt)}
+                              </span>
+                            </div>
+                            <p className="mt-1 text-gray-800 whitespace-pre-wrap break-words">{smartCase(reply.text)}</p>
+                            {reply.textZh && (
+                              <p className="mt-1 text-gray-500 whitespace-pre-wrap break-words">{reply.textZh}</p>
+                            )}
+                            <TweetMediaPreview media={reply.media} />
+                          </div>
                         </div>
-                      </div>
+                      ))}
                     </div>
-                  ))}
-
-                  {!commentsLoading && comments.length === 0 && !commentsError && (
-                    <div className="px-4 py-8 text-center text-xs text-gray-400">暂无评论</div>
+                  </div>
+                )}
+                <div className="divide-y divide-gray-100">
+                  {!commentsLoading && authorReplies.length === 0 && !commentsError && (
+                    <div className="px-4 py-8 text-center text-xs text-gray-400">暂无作者回复</div>
                   )}
                   {commentsError && (
                     <div className="px-4 py-3 text-xs text-red-600 flex items-center justify-between bg-red-50 border-t border-red-100">
@@ -494,29 +528,6 @@ export function TweetDetailShell({
                   )}
                 </div>
 
-                {commentsHasMore && !commentsError && (
-                  <div className="border-t border-gray-100 px-4 py-2.5">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={commentsLoading}
-                      className="w-full justify-center gap-2"
-                      onClick={loadMoreComments}
-                    >
-                      {commentsLoading ? (
-                        <>
-                          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                          加载中...
-                        </>
-                      ) : (
-                        <>
-                          <ChevronDown className="h-3.5 w-3.5" />
-                          加载更多评论
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                )}
               </div>
             </div>
           </div>
@@ -624,4 +635,3 @@ export function TweetDetailShell({
     </div>
   )
 }
-

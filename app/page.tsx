@@ -8,7 +8,7 @@ import { FloatingChatWindow } from "@/components/floating-chat-window"
 import { streamChatResponse } from "@/lib/use-chat-stream"
 import { isWordOrPhraseLookup, buildLookupPrompt } from "@/lib/prompts"
 import { ACCOUNTS } from "@/config/accounts"
-import type { Tweet, Article, ArticleBlock } from "@/lib/twitter"
+import type { Tweet, Article, ArticleBlock, TweetMedia } from "@/lib/twitter"
 import { formatRelativeTime, formatCount, isArticleTweet } from "@/lib/twitter"
 import { useSelectionScrollLock } from "@/lib/hooks"
 import { readSelectionAnchor } from "@/lib/selection"
@@ -62,6 +62,12 @@ type QuotedSelectionState = {
   sourceRole: "assistant"
   messageIndex: number
   fullMessageContent: string
+}
+type InlineAuthorRepliesState = {
+  replies: Tweet[]
+  loading: boolean
+  loaded: boolean
+  error?: string
 }
 
 // ─── 翻译缓存（localStorage，上限 500 条）────────────────────────────────────────
@@ -421,6 +427,48 @@ function mergeDraftText(currentText: string, nextText: string): string {
   return `${trimmedCurrent}\n\n${trimmedNext}`
 }
 
+function TweetMediaPreview({
+  media,
+  onImageClick,
+  compact = false,
+}: {
+  media: TweetMedia[]
+  onImageClick?: (url: string) => void
+  compact?: boolean
+}) {
+  const item = media.find((m) => m.url || m.previewUrl)
+  if (!item) return null
+
+  const src = item.url ?? item.previewUrl
+  if (!src) return null
+
+  const isPlayable = item.type === "video" || item.type === "animated_gif"
+  return (
+    <div className={`mt-2 overflow-hidden rounded-lg border border-gray-200/80 bg-gray-50 ${compact ? "max-w-sm" : ""}`}>
+      <button
+        type="button"
+        className="relative block w-full text-left"
+        onClick={(e) => {
+          e.stopPropagation()
+          onImageClick?.(src)
+        }}
+      >
+        <img
+          src={src}
+          alt=""
+          className={`${compact ? "max-h-40" : "max-h-48"} w-full object-cover`}
+          loading="lazy"
+        />
+        {isPlayable && (
+          <span className="absolute bottom-2 left-2 rounded-full bg-black/65 px-2 py-0.5 text-[11px] font-medium text-white">
+            {item.type === "animated_gif" ? "GIF" : "Video"}
+          </span>
+        )}
+      </button>
+    </div>
+  )
+}
+
 function buildQuotedFollowUpMessage(text: string, quotedSelection: QuotedSelectionState): string {
   const question = text.trim()
   const fullReply = quotedSelection.fullMessageContent.trim()
@@ -521,11 +569,14 @@ export default function HomePage() {
   // ── 评论视图（用于详情页内联展示）──
   const [commentsForTweet, setCommentsForTweet] = useState<Tweet | null>(null)
   const [comments, setComments] = useState<Tweet[]>([])
+  const [authorReplies, setAuthorReplies] = useState<Tweet[]>([])
   const [commentsHasMore, setCommentsHasMore] = useState(false)
   const [commentsCursor, setCommentsCursor] = useState<string | undefined>(undefined)
   const [commentsLoading, setCommentsLoading] = useState(false)
   const [commentsError, setCommentsError] = useState<string | null>(null)
   const [commentAnalysisPrefetching, setCommentAnalysisPrefetching] = useState(false)
+  const [inlineAuthorRepliesByTweet, setInlineAuthorRepliesByTweet] = useState<Record<string, InlineAuthorRepliesState>>({})
+  const inlineAuthorRepliesInFlightRef = useRef<Set<string>>(new Set())
 
   // ── AI 面板：宽度 + 开关 ──
   const [chatWidth, setChatWidth] = useState(DEFAULT_CHAT_WIDTH)
@@ -1169,12 +1220,14 @@ export default function HomePage() {
     if (!cursor || commentsForTweet?.id !== tweet.id) {
       setCommentsForTweet(tweet)
       setComments([])
+      setAuthorReplies([])
       setCommentsCursor(undefined)
       setCommentsHasMore(false)
     }
 
     try {
       const params = new URLSearchParams({ id: tweet.id })
+      params.set("authorUserName", tweet.author.userName)
       if (cursor) params.set("cursor", cursor)
       const res = await fetch(`/api/tweet-conversation?${params.toString()}`, { cache: "no-store" })
       if (!res.ok) throw new Error(`Error ${res.status}`)
@@ -1182,6 +1235,7 @@ export default function HomePage() {
       const incoming: Tweet[] = data.comments ?? []
 
       setComments((prev) => (cursor && commentsForTweet?.id === tweet.id ? [...prev, ...incoming] : incoming))
+      if (!cursor) setAuthorReplies((data.authorReplies ?? []) as Tweet[])
       setCommentsHasMore(Boolean(data.hasMore))
       setCommentsCursor(data.nextCursor as string | undefined)
     } catch (e) {
@@ -1190,6 +1244,56 @@ export default function HomePage() {
       setCommentsLoading(false)
     }
   }, [commentsForTweet])
+
+  const loadInlineAuthorReplies = useCallback(async (tweet: Tweet) => {
+    if (tweet.replyCount <= 0) {
+      setInlineAuthorRepliesByTweet((prev) => ({
+        ...prev,
+        [tweet.id]: { replies: [], loading: false, loaded: true },
+      }))
+      return
+    }
+    if (inlineAuthorRepliesInFlightRef.current.has(tweet.id)) return
+    const current = inlineAuthorRepliesByTweet[tweet.id]
+    if (current?.loaded || current?.loading) return
+
+    inlineAuthorRepliesInFlightRef.current.add(tweet.id)
+    setInlineAuthorRepliesByTweet((prev) => ({
+      ...prev,
+      [tweet.id]: { replies: prev[tweet.id]?.replies ?? [], loading: true, loaded: false },
+    }))
+
+    try {
+      const params = new URLSearchParams({
+        id: tweet.id,
+        authorUserName: tweet.author.userName,
+        authorOnly: "1",
+      })
+      const res = await fetch(`/api/tweet-conversation?${params.toString()}`, { cache: "no-store" })
+      if (!res.ok) throw new Error(`Error ${res.status}`)
+      const data = await res.json()
+      setInlineAuthorRepliesByTweet((prev) => ({
+        ...prev,
+        [tweet.id]: {
+          replies: (data.authorReplies ?? []) as Tweet[],
+          loading: false,
+          loaded: true,
+        },
+      }))
+    } catch (error) {
+      setInlineAuthorRepliesByTweet((prev) => ({
+        ...prev,
+        [tweet.id]: {
+          replies: prev[tweet.id]?.replies ?? [],
+          loading: false,
+          loaded: true,
+          error: error instanceof Error ? error.message : "加载作者回复失败",
+        },
+      }))
+    } finally {
+      inlineAuthorRepliesInFlightRef.current.delete(tweet.id)
+    }
+  }, [inlineAuthorRepliesByTweet])
 
   useEffect(() => {
     const cached = cache[activeTab]
@@ -1373,7 +1477,7 @@ export default function HomePage() {
       let hitCap = false
 
       if (!needFetch) {
-        finalList = comments
+        finalList = authorReplies
         await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
       } else {
         setCommentsError(null)
@@ -1384,11 +1488,15 @@ export default function HomePage() {
             cursor: tweetMatches ? commentsCursor : undefined,
             hasMore: tweetMatches ? commentsHasMore : true,
             tweetMatches,
+          }, {
+            authorUserName: tweet.author.userName,
           })
-          finalList = result.comments
+          const nextAuthorReplies = tweetMatches ? authorReplies : result.authorReplies
+          finalList = nextAuthorReplies
           hitCap = result.hitCap
           setCommentsForTweet(tweet)
           setComments(result.comments)
+          if (!tweetMatches) setAuthorReplies(nextAuthorReplies)
           setCommentsHasMore(result.hasMore)
           setCommentsCursor(result.nextCursor)
         } finally {
@@ -1419,6 +1527,7 @@ export default function HomePage() {
     speechStatus,
     commentsForTweet,
     comments,
+    authorReplies,
     commentsHasMore,
     commentsCursor,
     messages,
@@ -1862,6 +1971,8 @@ export default function HomePage() {
                           index={idx}
                           isSelected={selectedTweet?.id === tweet.id}
                           onAiClick={() => handleOpenAI(tweet)}
+                          authorRepliesState={inlineAuthorRepliesByTweet[tweet.id]}
+                          onLoadAuthorReplies={() => void loadInlineAuthorReplies(tweet)}
                           isMobile={isMobile}
                           onImageClick={setPreviewImageUrl}
                           onTextSelect={(text, ax, ay) => {
@@ -1884,6 +1995,8 @@ export default function HomePage() {
                           isSelected={selectedTweet?.id === tweet.id}
                           onAiClick={() => handleOpenAI(tweet)}
                           onOpenComments={handleOpenDetail}
+                          authorRepliesState={inlineAuthorRepliesByTweet[tweet.id]}
+                          onLoadAuthorReplies={() => void loadInlineAuthorReplies(tweet)}
                           onTextSelect={(text, ax, ay) => {
                             setPendingSelectionActionId(null)
                             setSelectionMenu({
@@ -1929,6 +2042,7 @@ export default function HomePage() {
             <DetailView
               rootTweet={detailTweet}
               comments={comments}
+              authorReplies={authorReplies}
               commentsLoading={commentsLoading}
               commentsError={commentsError}
               commentsHasMore={commentsHasMore}
@@ -2151,6 +2265,7 @@ export default function HomePage() {
 type DetailViewProps = {
   rootTweet: Tweet
   comments: Tweet[]
+  authorReplies: Tweet[]
   commentsLoading: boolean
   commentsError: string | null
   commentsHasMore: boolean
@@ -2165,6 +2280,7 @@ type DetailViewProps = {
 function DetailView({
   rootTweet,
   comments,
+  authorReplies,
   commentsLoading,
   commentsError,
   commentsHasMore,
@@ -2187,7 +2303,6 @@ function DetailView({
     if (!isMobile) return
     requestAnimationFrame(() => readSelection())
   }
-
   return (
     <>
       <div className="flex-1 overflow-y-auto overscroll-none hide-vertical-scrollbar min-h-0">
@@ -2234,17 +2349,7 @@ function DetailView({
                     {rootTweet.textZh}
                   </p>
                 )}
-                {rootTweet.media.length > 0 && rootTweet.media[0].type === "photo" && rootTweet.media[0].url && (
-                  <div className="mt-2 rounded-xl overflow-hidden border border-gray-200/80">
-                    <img
-                      src={rootTweet.media[0].url}
-                      alt="media"
-                      className="w-full max-h-48 object-cover cursor-pointer"
-                      loading="lazy"
-                      onClick={() => onImageClick?.(rootTweet.media[0].url!)}
-                    />
-                  </div>
-                )}
+                <TweetMediaPreview media={rootTweet.media} onImageClick={onImageClick} />
                 <div className="mt-2.5 flex items-center gap-4 text-sm text-gray-400">
                   <span className="flex items-center gap-1"><Heart className="h-3.5 w-3.5" />{formatCount(rootTweet.likeCount)}</span>
                   <span className="flex items-center gap-1"><MessageCircle className="h-3.5 w-3.5" />{formatCount(rootTweet.replyCount)}</span>
@@ -2267,60 +2372,64 @@ function DetailView({
 
           {/* 评论列表 */}
           <div className="py-3">
-            <div className="text-sm font-medium text-gray-700 mb-3">评论</div>
-            <div className="divide-y divide-gray-100">
-              {comments.map((c) => (
-                <div key={c.id} className="py-3 text-sm">
-                  <div className="flex gap-3">
-                    <div className="shrink-0">
-                      {c.author.profilePicture ? (
-                        <Image
-                          src={c.author.profilePicture}
-                          alt={c.author.name}
-                          width={32}
-                          height={32}
-                          className="w-8 h-8 rounded-full object-cover"
-                          unoptimized
-                        />
-                      ) : (
-                        <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 text-xs font-bold">
-                          {c.author.name?.[0] ?? "?"}
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-baseline gap-1.5 flex-wrap">
-                        <span className="font-medium text-gray-900 truncate">{c.author.name}</span>
-                        <span className="text-xs text-gray-400 shrink-0">@{c.author.userName}</span>
-                        <span className="text-xs text-gray-300 shrink-0">·</span>
-                        <span className="text-xs text-gray-400 shrink-0">{formatRelativeTime(c.createdAt)}</span>
+            <div className="text-sm font-medium text-gray-700 mb-3">作者回复</div>
+            {authorReplies.length > 0 && (
+              <div className="rounded-lg border border-emerald-100 bg-emerald-50/70 px-3 py-2.5">
+                <div className="space-y-3">
+                  {authorReplies.map((reply) => (
+                    <div key={reply.id} className="flex gap-3 text-sm">
+                      <div className="shrink-0">
+                        {reply.author.profilePicture ? (
+                          <Image
+                            src={reply.author.profilePicture}
+                            alt={reply.author.name}
+                            width={32}
+                            height={32}
+                            className="w-8 h-8 rounded-full object-cover"
+                            unoptimized
+                          />
+                        ) : (
+                          <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 text-xs font-bold">
+                            {reply.author.name?.[0] ?? "?"}
+                          </div>
+                        )}
                       </div>
-                      <p
-                        className="mt-1 text-gray-800 whitespace-pre-wrap break-words select-text"
-                        onMouseUp={handleMouseUp}
-                        onTouchEnd={handleTouchEnd}
-                      >
-                        {smartCase(c.text)}
-                      </p>
-                      {c.textZh && (
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-baseline gap-1.5 flex-wrap">
+                          <span className="font-medium text-gray-900 truncate">{reply.author.name}</span>
+                          <span className="text-xs text-gray-400 shrink-0">@{reply.author.userName}</span>
+                          <span className="text-xs rounded-full bg-emerald-100 px-1.5 py-0.5 text-emerald-700 shrink-0">作者</span>
+                          <span className="text-xs text-gray-300 shrink-0">·</span>
+                          <span className="text-xs text-gray-400 shrink-0">{formatRelativeTime(reply.createdAt)}</span>
+                        </div>
                         <p
-                          className="mt-1 text-gray-500 whitespace-pre-wrap break-words select-text"
+                          className="mt-1 text-gray-800 whitespace-pre-wrap break-words select-text"
                           onMouseUp={handleMouseUp}
                           onTouchEnd={handleTouchEnd}
                         >
-                          {c.textZh}
+                          {smartCase(reply.text)}
                         </p>
-                      )}
+                        {reply.textZh && (
+                          <p
+                            className="mt-1 text-gray-500 whitespace-pre-wrap break-words select-text"
+                            onMouseUp={handleMouseUp}
+                            onTouchEnd={handleTouchEnd}
+                          >
+                            {reply.textZh}
+                          </p>
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  ))}
                 </div>
-              ))}
-
-              {commentsLoading && comments.length === 0 && (
-                <div className="py-6 text-center text-xs text-gray-400">加载评论中...</div>
+              </div>
+            )}
+            <div className="divide-y divide-gray-100">
+              {commentsLoading && authorReplies.length === 0 && (
+                <div className="py-6 text-center text-xs text-gray-400">加载作者回复中...</div>
               )}
-              {!commentsLoading && comments.length === 0 && !commentsError && (
-                <div className="py-8 text-center text-xs text-gray-400">暂无评论</div>
+              {!commentsLoading && authorReplies.length === 0 && !commentsError && (
+                <div className="py-8 text-center text-xs text-gray-400">暂无作者回复</div>
               )}
               {commentsError && (
                 <div className="py-3 text-xs text-red-600 flex items-center justify-between bg-red-50 rounded-lg px-3">
@@ -2337,29 +2446,6 @@ function DetailView({
             </div>
           </div>
 
-          {commentsHasMore && !commentsError && (
-            <div className="pb-6">
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={commentsLoading}
-                className="w-full justify-center gap-2"
-                onClick={onLoadMore}
-              >
-                {commentsLoading ? (
-                  <>
-                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                    加载中...
-                  </>
-                ) : (
-                  <>
-                    <ChevronDown className="h-3.5 w-3.5" />
-                    加载更多评论
-                  </>
-                )}
-              </Button>
-            </div>
-          )}
         </div>
       </div>
     </>
@@ -2368,16 +2454,34 @@ function DetailView({
 
 // ─── TweetCard 组件 ────────────────────────────────────────────────────────────
 function TweetCard({
-  tweet, index, isSelected, onTextSelect, onAiClick, onOpenComments, isMobile, onImageClick,
+  tweet, index, isSelected, onTextSelect, onAiClick, onOpenComments, authorRepliesState, onLoadAuthorReplies, isMobile, onImageClick,
 }: {
   tweet: Tweet; index: number; isSelected: boolean
   onTextSelect?: (text: string, anchorX: number, anchorY: number) => void
   onAiClick: () => void
   onOpenComments: (tweet: Tweet) => void
+  authorRepliesState?: InlineAuthorRepliesState
+  onLoadAuthorReplies: () => void
   isMobile: boolean
   onImageClick?: (url: string) => void
 }) {
   const [isExpanded, setIsExpanded] = useState(false)
+  const cardRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    if (authorRepliesState?.loaded || authorRepliesState?.loading) return
+    const node = cardRef.current
+    if (!node) return
+
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return
+      onLoadAuthorReplies()
+      observer.disconnect()
+    }, { rootMargin: "600px 0px" })
+
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [authorRepliesState?.loaded, authorRepliesState?.loading, onLoadAuthorReplies])
 
   const readSelection = () => {
     if (!onTextSelect) return
@@ -2399,9 +2503,11 @@ function TweetCard({
   const shouldShowExpand =
     (tweet.text && tweet.text.length > 140) ||
     (tweet.textZh && tweet.textZh.length > 80)
+  const inlineAuthorReplies = authorRepliesState?.replies ?? []
 
   return (
     <article
+      ref={cardRef}
       className={`px-4 py-4 transition-colors tweet-card ${
         isSelected
           ? "bg-blue-50/90 border-l-[3px] border-blue-400"
@@ -2461,17 +2567,7 @@ function TweetCard({
               {isExpanded ? "收起" : "展开全文"}
             </button>
           )}
-          {tweet.media.length > 0 && tweet.media[0].type === "photo" && tweet.media[0].url && (
-            <div className="mt-2 rounded-xl overflow-hidden border border-gray-200/80">
-              <img
-                src={tweet.media[0].url}
-                alt="media"
-                className="w-full max-h-48 object-cover cursor-pointer"
-                loading="lazy"
-                onClick={(e) => { e.stopPropagation(); onImageClick?.(tweet.media[0].url!) }}
-              />
-            </div>
-          )}
+          <TweetMediaPreview media={tweet.media} onImageClick={onImageClick} />
           <div className="mt-2.5 flex items-center gap-4 text-sm text-gray-400">
             <span className="flex items-center gap-1"><Heart className="h-3.5 w-3.5" />{formatCount(tweet.likeCount)}</span>
             <button
@@ -2495,6 +2591,40 @@ function TweetCard({
               <span className="text-sm font-medium">推文分析</span>
             </button>
           </div>
+          {inlineAuthorReplies.length > 0 && (
+            <div className="mt-3 border-l-2 border-emerald-200 pl-3">
+              <div className="mb-1.5 text-xs font-medium text-emerald-700">作者回复</div>
+              <div className="space-y-2.5">
+                {inlineAuthorReplies.map((reply) => (
+                  <div key={reply.id} className="text-sm">
+                    <div className="flex items-baseline gap-1.5 flex-wrap">
+                      <span className="font-medium text-gray-900 truncate">{reply.author.name}</span>
+                      <span className="text-xs text-gray-400 shrink-0">@{reply.author.userName}</span>
+                      <span className="text-xs text-gray-300 shrink-0">·</span>
+                      <span className="text-xs text-gray-400 shrink-0">{formatRelativeTime(reply.createdAt)}</span>
+                    </div>
+                    <p
+                      className="mt-0.5 text-gray-700 leading-relaxed whitespace-pre-wrap break-words select-text"
+                      onMouseUp={handleMouseUp}
+                      onTouchEnd={handleTouchEnd}
+                    >
+                      {smartCase(reply.text)}
+                    </p>
+                    {reply.textZh && (
+                      <p
+                        className="mt-0.5 text-gray-500 leading-relaxed whitespace-pre-wrap break-words select-text"
+                        onMouseUp={handleMouseUp}
+                        onTouchEnd={handleTouchEnd}
+                      >
+                        {reply.textZh}
+                      </p>
+                    )}
+                    <TweetMediaPreview media={reply.media} onImageClick={onImageClick} compact />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </article>
@@ -2745,10 +2875,12 @@ function ArticleBlockRenderer({ block, onImageClick }: { block: ArticleBlock; on
 }
 
 function ArticleCard({
-  tweet, index, isSelected, onAiClick, isMobile, onImageClick, onTextSelect,
+  tweet, index, isSelected, onAiClick, authorRepliesState, onLoadAuthorReplies, isMobile, onImageClick, onTextSelect,
 }: {
   tweet: Tweet; index: number; isSelected: boolean
   onAiClick: () => void
+  authorRepliesState?: InlineAuthorRepliesState
+  onLoadAuthorReplies: () => void
   isMobile: boolean
   onImageClick?: (url: string) => void
   onTextSelect?: (text: string, anchorX: number, anchorY: number) => void
@@ -2757,6 +2889,22 @@ function ArticleCard({
   const [article, setArticle] = useState<Article | null>(null)
   const [articleLoading, setArticleLoading] = useState(false)
   const [articleError, setArticleError] = useState<string | null>(null)
+  const cardRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    if (authorRepliesState?.loaded || authorRepliesState?.loading) return
+    const node = cardRef.current
+    if (!node) return
+
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return
+      onLoadAuthorReplies()
+      observer.disconnect()
+    }, { rootMargin: "600px 0px" })
+
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [authorRepliesState?.loaded, authorRepliesState?.loading, onLoadAuthorReplies])
 
   const readSelection = () => {
     if (!onTextSelect) return
@@ -2785,9 +2933,11 @@ function ArticleCard({
 
   const displayTitle = article?.title ?? ""
   const displayPreview = article?.previewText ?? ""
+  const inlineAuthorReplies = authorRepliesState?.replies ?? []
 
   return (
     <article
+      ref={cardRef}
       className={`px-4 py-4 transition-colors tweet-card ${
         isSelected
           ? "bg-blue-50/90 border-l-[3px] border-blue-400"
@@ -2878,6 +3028,32 @@ function ArticleCard({
               <span className="text-sm font-medium">推文分析</span>
             </button>
           </div>
+          {inlineAuthorReplies.length > 0 && (
+            <div className="mt-3 border-l-2 border-emerald-200 pl-3">
+              <div className="mb-1.5 text-xs font-medium text-emerald-700">作者回复</div>
+              <div className="space-y-2.5">
+                {inlineAuthorReplies.map((reply) => (
+                  <div key={reply.id} className="text-sm">
+                    <div className="flex items-baseline gap-1.5 flex-wrap">
+                      <span className="font-medium text-gray-900 truncate">{reply.author.name}</span>
+                      <span className="text-xs text-gray-400 shrink-0">@{reply.author.userName}</span>
+                      <span className="text-xs text-gray-300 shrink-0">·</span>
+                      <span className="text-xs text-gray-400 shrink-0">{formatRelativeTime(reply.createdAt)}</span>
+                    </div>
+                    <p className="mt-0.5 text-gray-700 leading-relaxed whitespace-pre-wrap break-words">
+                      {smartCase(reply.text)}
+                    </p>
+                    {reply.textZh && (
+                      <p className="mt-0.5 text-gray-500 leading-relaxed whitespace-pre-wrap break-words">
+                        {reply.textZh}
+                      </p>
+                    )}
+                    <TweetMediaPreview media={reply.media} onImageClick={onImageClick} compact />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </article>
