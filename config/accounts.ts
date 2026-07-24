@@ -4,6 +4,8 @@ export interface TwitterAccount {
   description: string
   // AI 解读角色定制（可选）
   aiContext?: string
+  // 是否自动翻译推文（默认开启）
+  translate?: boolean
 }
 
 export const ACCOUNTS: TwitterAccount[] = [
@@ -31,7 +33,14 @@ export const ACCOUNTS: TwitterAccount[] = [
     description: "Chinese-language insights on global markets and macro trends.",
     aiContext: "This account posts Chinese-language takes on global financial markets, macro trends, and important policy or economic events, often mixing English tickers with Chinese commentary.",
   },
- 
+  {
+    userName: "dianzhuXS",
+    displayName: "dianzhuXS",
+    description: "Posts from @dianzhuXS.",
+    aiContext: "This tweet is from @dianzhuXS. Analyze it based on the content and context of the tweet without assuming a fixed topic or viewpoint.",
+    translate: false,
+  },
+
   // 添加更多账号：
   // {
   //   userName: "elonmusk",

@@ -1083,6 +1083,9 @@ export default function HomePage() {
 
   // ── 推文翻译（SSE 流式 + localStorage 缓存）──
   const translateTweets = useCallback(async (userName: string, tweets: Tweet[], searchCacheKey?: string) => {
+    const account = ACCOUNTS.find((item) => item.userName.toLowerCase() === userName.toLowerCase())
+    if (account?.translate === false) return
+
     const transCache = loadTransCache()
     const needTranslate = tweets.filter((t) => !transCache[t.id])
 
