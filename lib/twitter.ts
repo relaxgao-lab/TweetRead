@@ -131,7 +131,60 @@ function parseTweet(raw: unknown): Tweet {
   }
 }
 
-export async function fetchUserTweets(userName: string, cursor?: string, forceRefresh?: boolean): Promise<TweetsResponse> {
+const HISTORY_CURSOR_PREFIX = "history:"
+
+function encodeHistoryCursor(query: string, cursor: string): string {
+  return `${HISTORY_CURSOR_PREFIX}${Buffer.from(JSON.stringify({ query, cursor })).toString("base64url")}`
+}
+
+function decodeHistoryCursor(cursor?: string): { query: string; cursor: string } | undefined {
+  if (!cursor?.startsWith(HISTORY_CURSOR_PREFIX)) return undefined
+  try {
+    const value = JSON.parse(Buffer.from(cursor.slice(HISTORY_CURSOR_PREFIX.length), "base64url").toString()) as {
+      query?: unknown
+      cursor?: unknown
+    }
+    if (typeof value.query !== "string" || typeof value.cursor !== "string") return undefined
+    return { query: value.query, cursor: value.cursor }
+  } catch {
+    return undefined
+  }
+}
+
+function prepareHistoryPage(result: TweetsResponse, query: string): TweetsResponse {
+  if (result.nextCursor) {
+    return {
+      ...result,
+      hasMore: true,
+      nextCursor: encodeHistoryCursor(query, result.nextCursor),
+    }
+  }
+
+  const oldestTime = new Date(result.tweets.at(-1)?.createdAt ?? "").getTime()
+  if (result.tweets.length > 0 && Number.isFinite(oldestTime)) {
+    const nextQuery = `until_time:${Math.floor(oldestTime / 1000)}`
+    return {
+      ...result,
+      hasMore: true,
+      nextCursor: encodeHistoryCursor(nextQuery, ""),
+    }
+  }
+
+  return { ...result, hasMore: false, nextCursor: undefined }
+}
+
+export async function fetchUserTweets(
+  userName: string,
+  cursor?: string,
+  forceRefresh?: boolean,
+  before?: string,
+): Promise<TweetsResponse> {
+  const history = decodeHistoryCursor(cursor)
+  if (history) {
+    const result = await searchUserTweets(userName, history.query, history.cursor || undefined)
+    return prepareHistoryPage(result, history.query)
+  }
+
   const apiKey = getApiKey()
   const params = new URLSearchParams({ userName })
   if (cursor) params.set("cursor", cursor)
@@ -148,11 +201,32 @@ export async function fetchUserTweets(userName: string, cursor?: string, forceRe
 
   const data = asRecord(await res.json())
   const rawTweets = Array.isArray(data.tweets) ? data.tweets : []
+  const tweets = rawTweets.map(parseTweet)
+  const hasMore = (data.has_more as boolean | undefined) ?? !!(data.next_cursor)
+  const nextCursor = (data.next_cursor as string | undefined) ?? undefined
+
+  // 用户时间线接口有时会在仍有历史推文时提前报告分页结束。
+  // 此时按当前最旧推文的时间切换到高级搜索，只有历史搜索也没有数据才真正结束。
+  if (!hasMore) {
+    const oldestCreatedAt = tweets.at(-1)?.createdAt ?? before
+    const beforeTime = oldestCreatedAt ? new Date(oldestCreatedAt).getTime() : NaN
+    if (Number.isFinite(beforeTime)) {
+      const query = `until_time:${Math.floor(beforeTime / 1000)}`
+      const result = await searchUserTweets(userName, query)
+      const seen = new Set(tweets.map((tweet) => tweet.id))
+      const historyPage = prepareHistoryPage(result, query)
+      return {
+        tweets: [...tweets, ...historyPage.tweets.filter((tweet) => !seen.has(tweet.id))],
+        hasMore: historyPage.hasMore,
+        nextCursor: historyPage.nextCursor,
+      }
+    }
+  }
 
   return {
-    tweets: rawTweets.map(parseTweet),
-    hasMore: (data.has_more as boolean | undefined) ?? !!(data.next_cursor),
-    nextCursor: (data.next_cursor as string | undefined) ?? undefined,
+    tweets,
+    hasMore,
+    nextCursor,
   }
 }
 

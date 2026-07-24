@@ -1167,6 +1167,10 @@ export default function HomePage() {
     try {
       const params = new URLSearchParams({ userName })
       if (cursor) params.set("cursor", cursor)
+      if (cursor) {
+        const oldestCreatedAt = cache[userName]?.tweets.at(-1)?.createdAt
+        if (oldestCreatedAt) params.set("before", oldestCreatedAt)
+      }
       if (forceRefresh) params.set("refresh", "1")
       const res = await fetch(`/api/tweets?${params}`, { cache: "no-store", signal: controller.signal })
       if (!res.ok) throw new Error(`Error ${res.status}`)
@@ -1174,7 +1178,10 @@ export default function HomePage() {
       const incoming: Tweet[] = data.tweets ?? []
       setCache((prev) => {
         const existing = prev[userName]?.tweets ?? []
-        return { ...prev, [userName]: { tweets: isLoadMore ? [...existing, ...incoming] : incoming, hasMore: data.hasMore, nextCursor: data.nextCursor, loadedAt: Date.now() } }
+        const tweets = isLoadMore
+          ? [...existing, ...incoming.filter((tweet) => !existing.some((item) => item.id === tweet.id))]
+          : incoming
+        return { ...prev, [userName]: { tweets, hasMore: data.hasMore, nextCursor: data.nextCursor, loadedAt: Date.now() } }
       })
       translateTweets(userName, incoming)
     } catch (e) {
@@ -1186,7 +1193,7 @@ export default function HomePage() {
         setLoadingMore(false)
       }
     }
-  }, [translateTweets])
+  }, [cache, translateTweets])
 
   // ── 账户内搜索 ──
   const loadSearchResults = useCallback(async (userName: string, query: string, cursor?: string) => {
