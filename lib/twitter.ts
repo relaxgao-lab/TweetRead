@@ -133,40 +133,52 @@ function parseTweet(raw: unknown): Tweet {
 
 const HISTORY_CURSOR_PREFIX = "history:"
 
-function encodeHistoryCursor(query: string, cursor: string): string {
-  return `${HISTORY_CURSOR_PREFIX}${Buffer.from(JSON.stringify({ query, cursor })).toString("base64url")}`
+function encodeHistoryCursor(query: string, cursor: string, before?: string): string {
+  return `${HISTORY_CURSOR_PREFIX}${Buffer.from(JSON.stringify({ query, cursor, before })).toString("base64url")}`
 }
 
-function decodeHistoryCursor(cursor?: string): { query: string; cursor: string } | undefined {
+function decodeHistoryCursor(cursor?: string): { query: string; cursor: string; before?: string } | undefined {
   if (!cursor?.startsWith(HISTORY_CURSOR_PREFIX)) return undefined
   try {
     const value = JSON.parse(Buffer.from(cursor.slice(HISTORY_CURSOR_PREFIX.length), "base64url").toString()) as {
       query?: unknown
       cursor?: unknown
+      before?: unknown
     }
     if (typeof value.query !== "string" || typeof value.cursor !== "string") return undefined
-    return { query: value.query, cursor: value.cursor }
+    return {
+      query: value.query,
+      cursor: value.cursor,
+      before: typeof value.before === "string" ? value.before : undefined,
+    }
   } catch {
     return undefined
   }
 }
 
-function prepareHistoryPage(result: TweetsResponse, query: string): TweetsResponse {
+function prepareHistoryPage(
+  result: TweetsResponse,
+  query: string,
+  previous?: { wasContinuation: boolean; before?: string },
+): TweetsResponse {
+  const oldestCreatedAt = result.tweets.at(-1)?.createdAt
+
   if (result.nextCursor) {
     return {
       ...result,
       hasMore: true,
-      nextCursor: encodeHistoryCursor(query, result.nextCursor),
+      nextCursor: encodeHistoryCursor(query, result.nextCursor, oldestCreatedAt ?? previous?.before),
     }
   }
 
-  const oldestTime = new Date(result.tweets.at(-1)?.createdAt ?? "").getTime()
-  if (result.tweets.length > 0 && Number.isFinite(oldestTime)) {
+  const nextBoundary = oldestCreatedAt ?? (previous?.wasContinuation ? previous.before : undefined)
+  const oldestTime = new Date(nextBoundary ?? "").getTime()
+  if (Number.isFinite(oldestTime)) {
     const nextQuery = `until_time:${Math.floor(oldestTime / 1000)}`
     return {
       ...result,
       hasMore: true,
-      nextCursor: encodeHistoryCursor(nextQuery, ""),
+      nextCursor: encodeHistoryCursor(nextQuery, "", nextBoundary),
     }
   }
 
@@ -182,7 +194,22 @@ export async function fetchUserTweets(
   const history = decodeHistoryCursor(cursor)
   if (history) {
     const result = await searchUserTweets(userName, history.query, history.cursor || undefined)
-    return prepareHistoryPage(result, history.query)
+
+    // 某些高级搜索游标会以空页结束，但换成上一页最旧时间后仍能搜到更早数据。
+    // 在同一次请求内完成这个切换，避免用户点击后列表没有任何变化。
+    if (result.tweets.length === 0 && history.cursor && history.before) {
+      const beforeTime = new Date(history.before).getTime()
+      if (Number.isFinite(beforeTime)) {
+        const nextQuery = `until_time:${Math.floor(beforeTime / 1000)}`
+        const nextResult = await searchUserTweets(userName, nextQuery)
+        return prepareHistoryPage(nextResult, nextQuery)
+      }
+    }
+
+    return prepareHistoryPage(result, history.query, {
+      wasContinuation: history.cursor.length > 0,
+      before: history.before,
+    })
   }
 
   const apiKey = getApiKey()
