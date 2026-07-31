@@ -2,7 +2,7 @@ import OpenAI from "openai"
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
-const MODEL_ID = "gpt-5.4-nano-2026-03-17"
+const MODEL_ID = "gpt-5.4-mini"
 
 interface Message {
   role: "user" | "assistant" | "system"
